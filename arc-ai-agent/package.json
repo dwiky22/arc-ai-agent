@@ -1,0 +1,44 @@
+{
+  "name": "arc-ai-agent",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.101.0",
+    "@circle-fin/adapter-ethers-v6": "^1.8.2",
+    "@circle-fin/adapter-viem-v2": "^1.11.2",
+    "@circle-fin/app-kit": "^1.7.0",
+    "@circle-fin/bridge-kit": "^1.10.2",
+    "@circle-fin/swap-kit": "^1.2.3",
+    "dotenv": "^17.4.2",
+    "ethers": "^6.16.0",
+    "next": "16.2.7",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "viem": "^2.52.2"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-ethers": "^4.0.13",
+    "@nomicfoundation/hardhat-ignition": "^3.1.7",
+    "@nomicfoundation/hardhat-toolbox": "^7.0.0",
+    "@nomicfoundation/hardhat-toolbox-mocha-ethers": "^3.0.7",
+    "@tailwindcss/postcss": "^4",
+    "@types/chai": "^5.2.3",
+    "@types/chai-as-promised": "^8.0.2",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.19.20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "chai": "^6.2.2",
+    "forge-std": "github:foundry-rs/forge-std#v1.9.4",
+    "hardhat": "^3.8.0",
+    "mocha": "^11.7.6",
+    "tailwindcss": "^4",
+    "typescript": "~6.0.3"
+  },
+  "type": "module"
+}
