@@ -146,8 +146,8 @@ const BRIDGE_CHAINS = [
 // ─── Swap (Circle App Kit + SimpleAMM fallback) ───────────────
 async function executeSwap(tokenIn: string, tokenOut: string, amount: string): Promise<string> {
   try {
-    const { AppKit } = await import("@circle-fin/app-kit");
-    const { createAdapterFromProvider } = await import("@circle-fin/adapter-viem-v2");
+    const { AppKit } = await import(/* webpackIgnore: true */ "@circle-fin/app-kit");
+    const { createAdapterFromProvider } = await import(/* webpackIgnore: true */ "@circle-fin/adapter-viem-v2");
     const provider = (window as any).ethereum;
     if (!provider) throw new Error("No wallet");
     const adapter = await createAdapterFromProvider({ provider });
@@ -181,8 +181,8 @@ async function executeSwap(tokenIn: string, tokenOut: string, amount: string): P
 
 // ─── Bridge (Circle CCTP v2) ──────────────────────────────────
 async function executeBridge(fromChain: string, amount: string): Promise<string> {
-  const { BridgeKit } = await import("@circle-fin/bridge-kit");
-  const { createAdapterFromProvider } = await import("@circle-fin/adapter-viem-v2");
+  const { BridgeKit } = await import(/* webpackIgnore: true */ "@circle-fin/bridge-kit");
+  const { createAdapterFromProvider } = await import(/* webpackIgnore: true */ "@circle-fin/adapter-viem-v2");
   const provider = (window as any).ethereum;
   if (!provider) throw new Error("No wallet found");
   const adapter = await createAdapterFromProvider({ provider });
