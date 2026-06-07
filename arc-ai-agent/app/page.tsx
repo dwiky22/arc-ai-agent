@@ -1,7 +1,11 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
+import dynamic from "next/dynamic";
 import { ethers } from "ethers";
 import { switchToArc } from "@/lib/arc-chain";
+
+// Load CircleSwap only on client side (no SSR)
+const CircleSwap = dynamic(() => import("./components/CircleSwap"), { ssr: false });
 
 // ─── ABIs ─────────────────────────────────────────────────────
 const USDC_ABI = [
@@ -864,155 +868,50 @@ export default function Home() {
                     <p className="text-[11px] text-gray-600 mt-0.5 font-mono">Circle App Kit → SimpleAMM fallback</p>
                   </div>
                 </div>
-                <div className="p-6 space-y-2">
-                  {/* Pay */}
-                  <div className="bg-white/[0.03] border border-white/[0.07] rounded-xl p-4">
-                    <div className="flex justify-between items-center mb-3">
-                      <span className="text-[10px] text-gray-600 font-mono uppercase tracking-widest">You Pay</span>
-                      <button onClick={()=>setSwapAmount(swapFrom==="USDC"?usdcBal:eurcBal)}
-                        className="text-[10px] text-violet-400 hover:text-violet-300 font-mono">
-                        MAX: {swapFrom==="USDC"?usdcBal:eurcBal}
-                      </button>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <input value={swapAmount} onChange={e=>setSwapAmount(e.target.value)} placeholder="0.00" type="number"
-                        className="flex-1 bg-transparent text-white text-3xl outline-none font-mono placeholder:text-gray-800 min-w-0"/>
-                      <div className="flex items-center gap-2 bg-white/[0.05] border border-white/[0.08] rounded-xl px-3 py-2 flex-shrink-0">
-                        <span className="text-base">{swapFrom==="USDC"?"🔵":"🟡"}</span>
-                        <span className="font-mono text-white text-sm font-bold">{swapFrom}</span>
-                      </div>
-                    </div>
-                  </div>
-                  {/* Flip */}
-                  <div className="flex justify-center py-1">
-                    <button onClick={flipSwap}
-                      className="w-9 h-9 rounded-xl bg-white/[0.04] border border-white/[0.08] hover:border-violet-500/30 text-gray-500 hover:text-violet-400 flex items-center justify-center transition-all hover:scale-110 active:scale-95">
-                      ⇅
-                    </button>
-                  </div>
-                  {/* Receive */}
-                  <div className="bg-white/[0.02] border border-white/[0.05] rounded-xl p-4">
-                    <span className="text-[10px] text-gray-600 font-mono uppercase tracking-widest block mb-3">You Receive (est.)</span>
-                    <div className="flex items-center gap-3">
-                      <span className="flex-1 text-white text-3xl font-mono text-gray-400">{swapAmount||"0.00"}</span>
-                      <div className="flex items-center gap-2 bg-white/[0.05] border border-white/[0.08] rounded-xl px-3 py-2 flex-shrink-0">
-                        <span className="text-base">{swapTo==="USDC"?"🔵":"🟡"}</span>
-                        <span className="font-mono text-white text-sm font-bold">{swapTo}</span>
-                      </div>
-                    </div>
-                  </div>
-                  {/* Info */}
-                  <div className="bg-violet-500/5 border border-violet-500/10 rounded-xl px-4 py-3">
-                    <p className="text-[10px] text-gray-500 font-mono">ⓘ Circle Swap Kit (official pool) with SimpleAMM fallback</p>
-                  </div>
-                  <button onClick={handleSwap} disabled={!wallet||!swapAmount||swapLoading||swapFrom===swapTo}
-                    className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-25 disabled:cursor-not-allowed text-white font-bold py-3.5 rounded-xl font-mono text-xs transition-all active:scale-[0.99] flex items-center justify-center gap-2 shadow-lg shadow-violet-900/30">
-                    {swapLoading
-                      ? <><div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"/>Processing...</>
-                      : <>⇄ Swap {swapFrom} → {swapTo}</>}
-                  </button>
-                  {swapStatus && <StatusPill text={swapStatus}/>}
-                </div>
+                <CircleSwap
+                  wallet={wallet}
+                  usdcBal={usdcBal}
+                  eurcBal={eurcBal}
+                  onSuccess={(txHash) => {
+                    setTxCount(c=>c+1);
+                    refreshBalances(wallet, new ethers.BrowserProvider((window as any).ethereum));
+                  }}
+                />
               </div>
             </div>
           )}
+
 
           {/* ════════════════════════════════════════
               TAB: BRIDGE
           ════════════════════════════════════════ */}
           {activeTab === "bridge" && (
-            <div className="p-6 max-w-md space-y-4">
+            <div className="p-6 max-w-2xl space-y-4">
+              {/* Header */}
               <div className="relative overflow-hidden bg-[#08090f] border border-white/[0.07] rounded-2xl">
                 <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-blue-500/30 to-transparent"/>
                 <div className="px-6 py-5 border-b border-white/[0.06] flex items-center gap-3">
                   <div className="w-9 h-9 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">⬡</div>
                   <div>
                     <h2 className="text-white font-bold text-sm">Bridge USDC</h2>
-                    <p className="text-[11px] text-gray-600 mt-0.5 font-mono">Circle CCTP v2 · Native cross-chain</p>
+                    <p className="text-[11px] text-gray-600 mt-0.5 font-mono">Circle CCTP v2 · Powered by Circle</p>
                   </div>
                 </div>
-                <div className="p-6 space-y-4">
-                  {/* From chain selector */}
-                  <div>
-                    <div className="flex justify-between items-center mb-2">
-                      <label className="text-[10px] text-gray-500 font-mono uppercase tracking-widest">Source Chain</label>
-                      {bridgeSwitching && <span className="text-[10px] text-amber-400 font-mono flex items-center gap-1"><div className="w-2 h-2 border border-amber-400 border-t-transparent rounded-full animate-spin"/>switching...</span>}
-                    </div>
-                    <div className="grid grid-cols-1 gap-1.5">
-                      {BRIDGE_CHAINS.map(c => (
-                        <button key={c.value} onClick={()=>handleBridgeChainChange(c.value)}
-                          className={`flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-all ${
-                            bridgeFromChain===c.value
-                              ? "bg-blue-500/10 border-blue-500/30 text-white"
-                              : "bg-white/[0.02] border-white/[0.05] text-gray-500 hover:border-white/10 hover:text-gray-300"
-                          }`}>
-                          <span className="w-6 h-6 rounded-lg bg-black/30 flex items-center justify-center text-[11px] font-bold flex-shrink-0">{c.icon}</span>
-                          <span className="font-mono text-xs flex-1">{c.label}</span>
-                          {bridgeFromChain===c.value && bridgeSrcBalance && (
-                            <span className="text-[10px] text-blue-400 font-mono">{bridgeSrcBalance} USDC</span>
-                          )}
-                          {bridgeFromChain===c.value && <span className="text-blue-400 text-xs">✓</span>}
-                        </button>
-                      ))}
-                    </div>
+                {/* iframe Circle CCTP Bridge */}
+                <div className="p-4 space-y-3">
+                  <div className="bg-blue-500/5 border border-blue-500/15 rounded-xl px-4 py-3 flex items-center gap-2">
+                    <span className="text-blue-400 text-xs">ⓘ</span>
+                    <p className="text-[11px] text-gray-400 font-mono">Bridge powered by Circle CCTP v2 — connect wallet di bawah untuk mulai</p>
                   </div>
-
-                  {/* Arrow + Destination */}
-                  <div className="flex items-center gap-3">
-                    <div className="flex-1 h-px bg-white/[0.05]"/>
-                    <div className="w-7 h-7 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 text-xs">↓</div>
-                    <div className="flex-1 h-px bg-white/[0.05]"/>
+                  <div className="rounded-2xl overflow-hidden border border-white/[0.07]" style={{height:"600px"}}>
+                    <iframe
+                      src="https://www.circle.com/multichain-usdc/cctp"
+                      className="w-full h-full"
+                      style={{border:"none", background:"#000"}}
+                      title="Circle CCTP Bridge"
+                      allow="clipboard-write"
+                    />
                   </div>
-                  <div className="bg-cyan-500/5 border border-cyan-500/15 rounded-xl px-4 py-3 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-7 h-7 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 font-bold text-xs">A</div>
-                      <div>
-                        <p className="text-white font-mono text-xs font-bold">ARC Testnet</p>
-                        <p className="text-[10px] text-gray-600 font-mono">Destination · Always</p>
-                      </div>
-                    </div>
-                    <span className="text-[10px] text-cyan-400/70 font-mono bg-cyan-500/8 border border-cyan-500/15 px-2 py-1 rounded-lg">5042002</span>
-                  </div>
-
-                  {/* Amount */}
-                  <div>
-                    <div className="flex justify-between items-center mb-2">
-                      <label className="text-[10px] text-gray-500 font-mono uppercase tracking-widest">Amount USDC</label>
-                      {bridgeSrcBalance && (
-                        <button onClick={()=>setBridgeAmount(bridgeSrcBalance)}
-                          className="text-[10px] text-blue-400 hover:text-blue-300 font-mono transition-colors">
-                          MAX: {bridgeSrcBalance}
-                        </button>
-                      )}
-                    </div>
-                    <input value={bridgeAmount} onChange={e=>setBridgeAmount(e.target.value)}
-                      placeholder="0.00" type="number" className={inputCls}/>
-                  </div>
-
-                  {/* Info */}
-                  <div className="bg-white/[0.02] border border-white/[0.05] rounded-xl px-4 py-3 space-y-1.5">
-                    <p className="text-[10px] text-gray-500 font-mono">⏱ ETA: ~2–5 minutes via CCTP v2</p>
-                    <p className="text-[10px] text-gray-500 font-mono">🔐 Burns on source, mints natively on ARC</p>
-                    <p className="text-[10px] text-amber-500/70 font-mono">⚠ Auto-switches chain before bridging</p>
-                  </div>
-
-                  <button onClick={handleBridge} disabled={!wallet||!bridgeAmount||bridgeLoading}
-                    className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-25 disabled:cursor-not-allowed text-white font-bold py-3.5 rounded-xl font-mono text-xs transition-all active:scale-[0.99] flex items-center justify-center gap-2 shadow-lg shadow-blue-900/30">
-                    {bridgeLoading
-                      ? <><div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"/>Bridging via CCTP v2...</>
-                      : <>⬡ Bridge {bridgeAmount||"0"} USDC → ARC</>}
-                  </button>
-                  {bridgeStatus && (
-                    <div>
-                      <StatusPill text={bridgeStatus}/>
-                      {bridgeTxHash && (
-                        <a href={`https://testnet.arcscan.app/tx/${bridgeTxHash}`} target="_blank"
-                          className="block mt-2 text-center text-cyan-400 text-[11px] font-mono underline hover:text-cyan-300 transition-colors">
-                          ↗ View on ArcScan
-                        </a>
-                      )}
-                    </div>
-                  )}
                 </div>
               </div>
 
@@ -1030,6 +929,7 @@ export default function Home() {
             </div>
           )}
 
+          {/* dummy to close */}
           {/* ════════════════════════════════════════
               TAB: DASHBOARD
           ════════════════════════════════════════ */}
