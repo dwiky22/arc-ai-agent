@@ -2,9 +2,14 @@
 import { useState } from "react";
 import { ethers } from "ethers";
 
-// ─── CCTP v2 — TokenMessengerV2 address SAMA untuk semua chain ──
-// Source: https://developers.circle.com/cctp/references/contract-addresses
+// ─── CCTP v2 TokenMessengerV2 — sama untuk semua chain ───────
 const TOKEN_MESSENGER_V2 = "0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d";
+
+// MessageTransmitterV2 di ARC — untuk receiveMessage (mint)
+const ARC_MESSAGE_TRANSMITTER_V2 = "0x81D40F21F12A8F0E3252Bccb954D722d4c464B64";
+
+// Circle Iris Attestation API
+const IRIS_API = "https://iris-api-sandbox.circle.com/v2/messages";
 
 const BRIDGE_CHAIN_CONFIG: Record<string, {
   chainIdHex: string; name: string; rpc: string; symbol: string;
@@ -42,9 +47,9 @@ const BRIDGE_CHAIN_CONFIG: Record<string, {
   },
 };
 
-// ARC Testnet CCTP domain = 26 (resmi dari docs.arc.io)
 const ARC_CCTP_DOMAIN = 26;
 const ARC_CHAIN_ID_HEX = "0x4cef52";
+const ARC_RPC = "https://rpc.arc.io";
 
 const USDC_ABI = [
   "function balanceOf(address) view returns (uint256)",
@@ -53,6 +58,9 @@ const USDC_ABI = [
 ];
 const TOKEN_MESSENGER_V2_ABI = [
   "function depositForBurn(uint256 amount, uint32 destinationDomain, bytes32 mintRecipient, address burnToken, bytes32 destinationCaller, uint256 maxFee, uint32 minFinalityThreshold) returns (uint64 nonce)",
+];
+const MESSAGE_TRANSMITTER_ABI = [
+  "function receiveMessage(bytes message, bytes attestation) returns (bool success)",
 ];
 
 const BRIDGE_CHAINS = [
@@ -76,6 +84,8 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
   const [switching, setSwitching]   = useState(false);
   const [status, setStatus]         = useState("");
   const [txHash, setTxHash]         = useState("");
+  const [mintTxHash, setMintTxHash] = useState("");
+  const [pollCount, setPollCount]   = useState(0);
 
   async function switchAndFetch(chain: string) {
     if (!wallet) return;
@@ -105,11 +115,41 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
     setSwitching(false);
   }
 
+  // Poll Circle Iris API sampai attestation ready
+  async function pollAttestation(
+    srcDomain: number,
+    burnTxHash: string,
+    maxAttempts = 60
+  ): Promise<{ message: string; attestation: string } | null> {
+    for (let i = 0; i < maxAttempts; i++) {
+      setPollCount(i + 1);
+      try {
+        const url = `${IRIS_API}/${srcDomain}?transactionHash=${burnTxHash}`;
+        const res = await fetch(url);
+        if (res.ok) {
+          const data = await res.json();
+          const msg = data?.messages?.[0];
+          if (msg?.status === "complete" && msg?.attestation && msg?.message) {
+            return { message: msg.message, attestation: msg.attestation };
+          }
+        }
+      } catch (e) {
+        console.warn("Iris poll error:", e);
+      }
+      // Tunggu 5 detik sebelum poll berikutnya
+      await new Promise(r => setTimeout(r, 5000));
+    }
+    return null;
+  }
+
   async function handleBridge() {
     if (!amount || !wallet) return;
     setLoading(true);
     setStatus("");
     setTxHash("");
+    setMintTxHash("");
+    setPollCount(0);
+
     try {
       const cfg = BRIDGE_CHAIN_CONFIG[fromChain];
       const eth = (window as any).ethereum;
@@ -132,7 +172,7 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
       const parsed = ethers.parseUnits(amount, 6);
 
       // Step 2: Cek saldo
-      setStatus("⏳ Checking USDC balance on " + cfg.name + "...");
+      setStatus("⏳ Checking USDC balance...");
       const usdc = new ethers.Contract(cfg.usdcAddress, USDC_ABI, signer);
       const bal = await usdc.balanceOf(wallet);
       const balFmt = parseFloat(ethers.formatUnits(bal, 6)).toFixed(2);
@@ -144,53 +184,89 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
         return;
       }
 
-      // Step 3: Approve USDC ke TokenMessengerV2 (cek allowance dulu)
+      // Step 3: Approve
       setStatus("⏳ Checking allowance...");
       const allowance = await usdc.allowance(wallet, TOKEN_MESSENGER_V2);
       if (allowance < parsed) {
         setStatus("⏳ Approving USDC... (confirm di wallet)");
         const approveTx = await usdc.approve(TOKEN_MESSENGER_V2, parsed);
         await approveTx.wait();
-        setStatus("✅ Approved!");
       }
 
       // Step 4: depositForBurn CCTP v2
-      // Parameter v2 baru: destinationCaller (bytes32 zero = siapa saja bisa mint),
-      //   maxFee (0 = no fee), minFinalityThreshold (1000 = fast finality)
       setStatus("⏳ Burning USDC via CCTP v2... (confirm di wallet)");
       const messenger = new ethers.Contract(TOKEN_MESSENGER_V2, TOKEN_MESSENGER_V2_ABI, signer);
       const mintRecipient = ethers.zeroPadValue(wallet, 32);
-      const destinationCaller = ethers.ZeroHash; // bytes32(0) = anyone can call receiveMessage
-      const maxFee = 0n;
-      const minFinalityThreshold = 1000; // fast finality
 
       const burnTx = await messenger.depositForBurn(
         parsed,
         ARC_CCTP_DOMAIN,
         mintRecipient,
         cfg.usdcAddress,
-        destinationCaller,
-        maxFee,
-        minFinalityThreshold
+        ethers.ZeroHash, // destinationCaller = anyone
+        0n,              // maxFee = 0
+        1000             // minFinalityThreshold = fast
       );
       await burnTx.wait();
-
       setTxHash(burnTx.hash);
-      setStatus(`✅ Bridge submitted! ${amount} USDC burned on ${cfg.name} → minting on ARC (~2-5 min)`);
-      setAmount("");
-      onSuccess(burnTx.hash);
+      setStatus(`✅ Burn berhasil! Menunggu attestation Circle Iris...`);
 
-      // Auto switch balik ke ARC
-      setTimeout(async () => {
-        try {
-          await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: ARC_CHAIN_ID_HEX }] });
-        } catch {}
-      }, 2000);
+      // Step 5: Poll attestation
+      setStatus("⏳ Polling Circle Iris API untuk attestation...");
+      const attestationData = await pollAttestation(cfg.cctpDomain, burnTx.hash);
+
+      if (!attestationData) {
+        setStatus(`⚠️ Attestation timeout. Burn tx sudah confirmed:\n${burnTx.hash}\nCoba claim manual nanti.`);
+        setLoading(false);
+        return;
+      }
+
+      // Step 6: Switch ke ARC untuk mint
+      setStatus("⏳ Attestation ready! Switching ke ARC untuk mint...");
+      try {
+        await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: ARC_CHAIN_ID_HEX }] });
+      } catch (e: any) {
+        if (e.code === 4902) {
+          await eth.request({
+            method: "wallet_addEthereumChain",
+            params: [{
+              chainId: ARC_CHAIN_ID_HEX, chainName: "ARC Testnet",
+              rpcUrls: [ARC_RPC], nativeCurrency: { name: "ARC", symbol: "ARC", decimals: 18 },
+              blockExplorerUrls: ["https://testnet.arcscan.app"],
+            }],
+          });
+        } else throw e;
+      }
+
+      const arcProvider = new ethers.BrowserProvider(eth);
+      const arcSigner = await arcProvider.getSigner();
+
+      // Step 7: receiveMessage di ARC (mint USDC)
+      setStatus("⏳ Minting USDC di ARC... (confirm di wallet)");
+      const transmitter = new ethers.Contract(
+        ARC_MESSAGE_TRANSMITTER_V2,
+        MESSAGE_TRANSMITTER_ABI,
+        arcSigner
+      );
+      const mintTx = await transmitter.receiveMessage(
+        attestationData.message,
+        attestationData.attestation
+      );
+      await mintTx.wait();
+
+      setMintTxHash(mintTx.hash);
+      setStatus(`✅ Bridge selesai! ${amount} USDC sudah di ARC Testnet!`);
+      setAmount("");
+      onSuccess(mintTx.hash);
 
     } catch (e: any) {
       console.error("Bridge error:", e);
-      const msg = e?.reason || e?.data?.message || e?.message || "Bridge failed";
-      setStatus("❌ " + msg.slice(0, 200));
+      const msg = e?.reason || e?.data?.message || e?.shortMessage || e?.message || "Bridge failed";
+      if (msg.includes("user rejected")) {
+        setStatus("❌ Transaksi dibatalkan di wallet.");
+      } else {
+        setStatus("❌ " + msg.slice(0, 200));
+      }
     }
     setLoading(false);
   }
@@ -240,10 +316,10 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
           <div className="w-7 h-7 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 font-bold text-xs">A</div>
           <div>
             <p className="text-white font-mono text-xs font-bold">ARC Testnet</p>
-            <p className="text-[10px] text-gray-600 font-mono">CCTP Domain 26 · Always</p>
+            <p className="text-[10px] text-gray-600 font-mono">CCTP Domain 26 · Auto-claim</p>
           </div>
         </div>
-        <span className="text-[10px] text-cyan-400/70 font-mono bg-cyan-500/8 border border-cyan-500/15 px-2 py-1 rounded-lg">5042002</span>
+        <span className="text-[10px] text-cyan-400/70 font-mono bg-cyan-500/8 border border-cyan-500/15 px-2 py-1 rounded-lg">Auto ✓</span>
       </div>
 
       {/* Amount */}
@@ -263,16 +339,17 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
 
       {/* Info */}
       <div className="bg-white/[0.02] border border-white/[0.05] rounded-xl px-4 py-3 space-y-1.5">
-        <p className="text-[10px] text-gray-500 font-mono">🔐 Circle CCTP v2 — TokenMessengerV2 · depositForBurn</p>
-        <p className="text-[10px] text-gray-500 font-mono">⏱ Fast finality ~30 detik · Standard ~2-5 menit</p>
-        <p className="text-[10px] text-gray-500 font-mono">🔗 TokenMessengerV2: 0x28b5a0e9...8cf5d</p>
-        <p className="text-[10px] text-amber-500/70 font-mono">⚠ Auto-switch ke source chain sebelum bridge</p>
+        <p className="text-[10px] text-gray-500 font-mono">🔐 CCTP v2 · Burn → Iris Attestation → Auto Mint</p>
+        <p className="text-[10px] text-gray-500 font-mono">⏱ Fast finality ~30 detik · auto-claim otomatis</p>
+        <p className="text-[10px] text-amber-500/70 font-mono">⚠ Jangan tutup tab selama proses berlangsung</p>
       </div>
 
       <button onClick={handleBridge} disabled={!wallet || !amount || loading}
         className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-25 disabled:cursor-not-allowed text-white font-bold py-3.5 rounded-xl font-mono text-xs transition-all active:scale-[0.99] flex items-center justify-center gap-2 shadow-lg shadow-blue-900/30">
         {loading
-          ? <><div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"/>Bridging via CCTP v2...</>
+          ? <><div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"/>
+              {pollCount > 0 ? `Waiting attestation... (${pollCount}/60)` : "Bridging..."}
+            </>
           : <>⬡ Bridge {amount || "0"} USDC → ARC</>}
       </button>
 
@@ -280,13 +357,20 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
         <div className={`rounded-xl px-4 py-3 text-xs font-mono border ${
           status.startsWith("✅") ? "bg-emerald-500/8 border-emerald-500/20 text-emerald-300" :
           status.startsWith("❌") ? "bg-red-500/8 border-red-500/20 text-red-300" :
+          status.startsWith("⚠") ? "bg-amber-500/8 border-amber-500/20 text-amber-300" :
           "bg-amber-500/8 border-amber-500/20 text-amber-300"
         }`}>
-          {status}
+          <p className="whitespace-pre-wrap">{status}</p>
           {txHash && (
-            <a href={`https://testnet.arcscan.app/tx/${txHash}`} target="_blank"
+            <a href={`https://sepolia.etherscan.io/tx/${txHash}`} target="_blank"
               className="block mt-2 text-cyan-400 text-[11px] underline hover:text-cyan-300">
-              ↗ View on ArcScan
+              ↗ Burn tx (Etherscan)
+            </a>
+          )}
+          {mintTxHash && (
+            <a href={`https://testnet.arcscan.app/tx/${mintTxHash}`} target="_blank"
+              className="block mt-1 text-emerald-400 text-[11px] underline hover:text-emerald-300">
+              ↗ Mint tx (ArcScan)
             </a>
           )}
         </div>
