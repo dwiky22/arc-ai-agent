@@ -41,7 +41,7 @@ const BRIDGE_CHAIN_CONFIG: Record<string, {
 const ARC_CHAIN_ID_HEX   = "0x4cef52";
 const ARC_RPC             = "https://rpc.arc.io";
 const TOKEN_MESSENGER_V2  = "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA";
-const ARC_MSG_TRANSMITTER = "0x81D40F21F12A8F0E3252Bccb954D722d4c464B64";
+const ARC_MSG_TRANSMITTER = "0xe737e5cebeeba77efe34d4aa090756590b1ce275";
 const IRIS_API            = "https://iris-api-sandbox.circle.com/v2/messages";
 const ARC_CCTP_DOMAIN     = 26;
 
@@ -232,7 +232,7 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
         parsed, ARC_CCTP_DOMAIN,
         ethers.zeroPadValue(wallet, 32),
         cfg.usdcAddress,
-        ethers.ZeroHash, 0n, 0
+        ethers.ZeroHash, 500n, 0
       );
       await burnTx.wait();
       setSteps(prev => [...prev, `burn: ✓ ${burnTx.hash.slice(0, 14)}...`]);
