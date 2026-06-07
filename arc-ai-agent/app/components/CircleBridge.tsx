@@ -232,7 +232,7 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
         parsed, ARC_CCTP_DOMAIN,
         ethers.zeroPadValue(wallet, 32),
         cfg.usdcAddress,
-        ethers.ZeroHash, 0n, 1000
+        ethers.ZeroHash, 0n, 0
       );
       await burnTx.wait();
       setSteps(prev => [...prev, `burn: ✓ ${burnTx.hash.slice(0, 14)}...`]);
