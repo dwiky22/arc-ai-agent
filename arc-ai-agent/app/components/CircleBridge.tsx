@@ -129,8 +129,8 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
       ]);
 
       // Step 3: Buat adapter dari browser wallet (MetaMask)
-      const provider = new ethers.BrowserProvider(eth);
-      const adapter = await createEthersAdapterFromProvider({ provider: provider as any });
+      // Bridge Kit butuh raw EIP-1193 provider (window.ethereum), bukan BrowserProvider
+      const adapter = await createEthersAdapterFromProvider({ provider: eth });
 
       const kit = new BridgeKit();
 
