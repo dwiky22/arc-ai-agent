@@ -2,48 +2,57 @@
 import { useState } from "react";
 import { ethers } from "ethers";
 
-// ─── CCTP v2 Source Chain Config ─────────────────────────────
+// ─── CCTP v2 — TokenMessengerV2 address SAMA untuk semua chain ──
+// Source: https://developers.circle.com/cctp/references/contract-addresses
+const TOKEN_MESSENGER_V2 = "0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d";
+
 const BRIDGE_CHAIN_CONFIG: Record<string, {
   chainIdHex: string; name: string; rpc: string; symbol: string;
-  usdcAddress: string; tokenMessenger: string; cctpDomain: number;
+  usdcAddress: string; cctpDomain: number;
 }> = {
   Ethereum_Sepolia: {
-    chainIdHex: "0xaa36a7", name: "Ethereum Sepolia", rpc: "https://ethereum-sepolia-rpc.publicnode.com",
+    chainIdHex: "0xaa36a7", name: "Ethereum Sepolia",
+    rpc: "https://ethereum-sepolia-rpc.publicnode.com",
     symbol: "ETH", usdcAddress: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
-    tokenMessenger: "0x9f3B8679c73C2Fef8b59B4f3444d4e156fb70AA5", cctpDomain: 0,
+    cctpDomain: 0,
   },
   Base_Sepolia: {
-    chainIdHex: "0x14a34", name: "Base Sepolia", rpc: "https://base-sepolia-rpc.publicnode.com",
+    chainIdHex: "0x14a34", name: "Base Sepolia",
+    rpc: "https://base-sepolia-rpc.publicnode.com",
     symbol: "ETH", usdcAddress: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-    tokenMessenger: "0x9f3B8679c73C2Fef8b59B4f3444d4e156fb70AA5", cctpDomain: 6,
+    cctpDomain: 6,
   },
   Arbitrum_Sepolia: {
-    chainIdHex: "0x66eee", name: "Arbitrum Sepolia", rpc: "https://sepolia-rollup.arbitrum.io/rpc",
+    chainIdHex: "0x66eee", name: "Arbitrum Sepolia",
+    rpc: "https://sepolia-rollup.arbitrum.io/rpc",
     symbol: "ETH", usdcAddress: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
-    tokenMessenger: "0x9f3B8679c73C2Fef8b59B4f3444d4e156fb70AA5", cctpDomain: 3,
+    cctpDomain: 3,
   },
   Avalanche_Fuji: {
-    chainIdHex: "0xa869", name: "Avalanche Fuji", rpc: "https://api.avax-test.network/ext/bc/C/rpc",
+    chainIdHex: "0xa869", name: "Avalanche Fuji",
+    rpc: "https://api.avax-test.network/ext/bc/C/rpc",
     symbol: "AVAX", usdcAddress: "0x5425890298aed601595a70AB815c96711a31Bc65",
-    tokenMessenger: "0xeb08f243E5d3FCFF26A9E38Ae5520A669f4019d0", cctpDomain: 1,
+    cctpDomain: 1,
   },
   OP_Sepolia: {
-    chainIdHex: "0xaa37dc", name: "Optimism Sepolia", rpc: "https://sepolia.optimism.io",
+    chainIdHex: "0xaa37dc", name: "Optimism Sepolia",
+    rpc: "https://sepolia.optimism.io",
     symbol: "ETH", usdcAddress: "0x5fd84259d66Cd46123540766Be93DFE6D43130D9",
-    tokenMessenger: "0x9f3B8679c73C2Fef8b59B4f3444d4e156fb70AA5", cctpDomain: 2,
+    cctpDomain: 2,
   },
 };
 
-// ─── ARC Testnet CCTP domain = 26 (dari docs resmi) ──────────
+// ARC Testnet CCTP domain = 26 (resmi dari docs.arc.io)
 const ARC_CCTP_DOMAIN = 26;
-const ARC_CHAIN_ID_HEX = "0x4cef52"; // 5042002
+const ARC_CHAIN_ID_HEX = "0x4cef52";
 
 const USDC_ABI = [
   "function balanceOf(address) view returns (uint256)",
   "function approve(address spender, uint256 amount) returns (bool)",
+  "function allowance(address owner, address spender) view returns (uint256)",
 ];
-const TOKEN_MESSENGER_ABI = [
-  "function depositForBurn(uint256 amount, uint32 destinationDomain, bytes32 mintRecipient, address burnToken) returns (uint64 nonce)",
+const TOKEN_MESSENGER_V2_ABI = [
+  "function depositForBurn(uint256 amount, uint32 destinationDomain, bytes32 mintRecipient, address burnToken, bytes32 destinationCaller, uint256 maxFee, uint32 minFinalityThreshold) returns (uint64 nonce)",
 ];
 
 const BRIDGE_CHAINS = [
@@ -135,16 +144,35 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
         return;
       }
 
-      // Step 3: Approve USDC ke TokenMessenger
-      setStatus("⏳ Approving USDC... (confirm di wallet)");
-      const approveTx = await usdc.approve(cfg.tokenMessenger, parsed);
-      await approveTx.wait();
+      // Step 3: Approve USDC ke TokenMessengerV2 (cek allowance dulu)
+      setStatus("⏳ Checking allowance...");
+      const allowance = await usdc.allowance(wallet, TOKEN_MESSENGER_V2);
+      if (allowance < parsed) {
+        setStatus("⏳ Approving USDC... (confirm di wallet)");
+        const approveTx = await usdc.approve(TOKEN_MESSENGER_V2, parsed);
+        await approveTx.wait();
+        setStatus("✅ Approved!");
+      }
 
-      // Step 4: depositForBurn via CCTP v2
+      // Step 4: depositForBurn CCTP v2
+      // Parameter v2 baru: destinationCaller (bytes32 zero = siapa saja bisa mint),
+      //   maxFee (0 = no fee), minFinalityThreshold (1000 = fast finality)
       setStatus("⏳ Burning USDC via CCTP v2... (confirm di wallet)");
-      const messenger = new ethers.Contract(cfg.tokenMessenger, TOKEN_MESSENGER_ABI, signer);
+      const messenger = new ethers.Contract(TOKEN_MESSENGER_V2, TOKEN_MESSENGER_V2_ABI, signer);
       const mintRecipient = ethers.zeroPadValue(wallet, 32);
-      const burnTx = await messenger.depositForBurn(parsed, ARC_CCTP_DOMAIN, mintRecipient, cfg.usdcAddress);
+      const destinationCaller = ethers.ZeroHash; // bytes32(0) = anyone can call receiveMessage
+      const maxFee = 0n;
+      const minFinalityThreshold = 1000; // fast finality
+
+      const burnTx = await messenger.depositForBurn(
+        parsed,
+        ARC_CCTP_DOMAIN,
+        mintRecipient,
+        cfg.usdcAddress,
+        destinationCaller,
+        maxFee,
+        minFinalityThreshold
+      );
       await burnTx.wait();
 
       setTxHash(burnTx.hash);
@@ -152,7 +180,7 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
       setAmount("");
       onSuccess(burnTx.hash);
 
-      // Step 5: Auto switch balik ke ARC
+      // Auto switch balik ke ARC
       setTimeout(async () => {
         try {
           await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: ARC_CHAIN_ID_HEX }] });
@@ -160,7 +188,9 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
       }, 2000);
 
     } catch (e: any) {
-      setStatus("❌ " + (e.message || "Bridge failed").slice(0, 150));
+      console.error("Bridge error:", e);
+      const msg = e?.reason || e?.data?.message || e?.message || "Bridge failed";
+      setStatus("❌ " + msg.slice(0, 200));
     }
     setLoading(false);
   }
@@ -233,9 +263,9 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
 
       {/* Info */}
       <div className="bg-white/[0.02] border border-white/[0.05] rounded-xl px-4 py-3 space-y-1.5">
-        <p className="text-[10px] text-gray-500 font-mono">🔐 Circle CCTP v2 — depositForBurn → mint native USDC</p>
-        <p className="text-[10px] text-gray-500 font-mono">⏱ ETA: ~2–5 menit setelah konfirmasi</p>
-        <p className="text-[10px] text-gray-500 font-mono">🔗 CCTP Domain ARC: 26 (resmi dari docs.arc.io)</p>
+        <p className="text-[10px] text-gray-500 font-mono">🔐 Circle CCTP v2 — TokenMessengerV2 · depositForBurn</p>
+        <p className="text-[10px] text-gray-500 font-mono">⏱ Fast finality ~30 detik · Standard ~2-5 menit</p>
+        <p className="text-[10px] text-gray-500 font-mono">🔗 TokenMessengerV2: 0x28b5a0e9...8cf5d</p>
         <p className="text-[10px] text-amber-500/70 font-mono">⚠ Auto-switch ke source chain sebelum bridge</p>
       </div>
 
