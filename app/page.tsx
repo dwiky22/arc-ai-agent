@@ -143,56 +143,34 @@ const BRIDGE_CHAINS = [
   { value:"OP_Sepolia",       label:"Optimism Sepolia", icon:"O" },
 ];
 
-// ─── Swap (Circle App Kit + SimpleAMM fallback) ───────────────
+// ─── Swap (SimpleAMM) ─────────────────────────────────────────
 async function executeSwap(tokenIn: string, tokenOut: string, amount: string): Promise<string> {
-  try {
-    const { AppKit } = await import("@circle-fin/app-kit");
-    const { createAdapterFromProvider } = await import("@circle-fin/adapter-viem-v2");
-    const provider = (window as any).ethereum;
-    if (!provider) throw new Error("No wallet");
-    const adapter = await createAdapterFromProvider({ provider });
-    const kit = new AppKit();
-    const result = await kit.swap({
-      from: { adapter, chain: "Arc_Testnet" },
-      tokenIn: tokenIn as "USDC"|"EURC",
-      tokenOut: tokenOut as "USDC"|"EURC",
-      amountIn: amount,
-      config: { kitKey: process.env.NEXT_PUBLIC_KIT_KEY as string },
-    });
-    return (result as any).txHash;
-  } catch (err) {
-    console.warn("Circle Swap fallback → SimpleAMM:", err);
-    const provider = new ethers.BrowserProvider((window as any).ethereum);
-    const signer   = await provider.getSigner();
-    const parsed   = ethers.parseUnits(amount, 6);
-    if (tokenIn === "USDC") {
-      const usdc = new ethers.Contract(USDC_ADDRESS, USDC_ABI, signer);
-      await (await usdc.approve(AMM_ADDRESS, parsed)).wait();
-      const amm = new ethers.Contract(AMM_ADDRESS, AMM_ABI, signer);
-      const tx  = await amm.swapAtoB(parsed, 0n); await tx.wait(); return tx.hash;
-    } else {
-      const eurc = new ethers.Contract(EURC_ADDRESS, EURC_ABI, signer);
-      await (await eurc.approve(AMM_ADDRESS, parsed)).wait();
-      const amm = new ethers.Contract(AMM_ADDRESS, AMM_ABI, signer);
-      const tx  = await amm.swapBtoA(parsed, 0n); await tx.wait(); return tx.hash;
-    }
+  const provider = new ethers.BrowserProvider((window as any).ethereum);
+  const signer   = await provider.getSigner();
+  const parsed   = ethers.parseUnits(amount, 6);
+  if (tokenIn === "USDC") {
+    const usdc = new ethers.Contract(USDC_ADDRESS, USDC_ABI, signer);
+    await (await usdc.approve(AMM_ADDRESS, parsed)).wait();
+    const amm = new ethers.Contract(AMM_ADDRESS, AMM_ABI, signer);
+    const tx  = await amm.swapAtoB(parsed, 0n); await tx.wait(); return tx.hash;
+  } else {
+    const eurc = new ethers.Contract(EURC_ADDRESS, EURC_ABI, signer);
+    await (await eurc.approve(AMM_ADDRESS, parsed)).wait();
+    const amm = new ethers.Contract(AMM_ADDRESS, AMM_ABI, signer);
+    const tx  = await amm.swapBtoA(parsed, 0n); await tx.wait(); return tx.hash;
   }
 }
 
-// ─── Bridge (Circle CCTP v2) ──────────────────────────────────
+// ─── Bridge (CCTP v2 via API route) ───────────────────────────
 async function executeBridge(fromChain: string, amount: string): Promise<string> {
-  const { BridgeKit } = await import("@circle-fin/bridge-kit");
-  const { createAdapterFromProvider } = await import("@circle-fin/adapter-viem-v2");
-  const provider = (window as any).ethereum;
-  if (!provider) throw new Error("No wallet found");
-  const adapter = await createAdapterFromProvider({ provider });
-  const kit = new BridgeKit();
-  const result = await kit.bridge({
-    from: { adapter, chain: fromChain },
-    to:   { adapter, chain: "Arc_Testnet" },
-    amount,
+  const res = await fetch("/api/bridge", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fromChain, amount }),
   });
-  return (result as any).txHash;
+  const data = await res.json();
+  if (!data.txHash) throw new Error(data.error || "Bridge failed");
+  return data.txHash;
 }
 
 // ─── Cards ────────────────────────────────────────────────────
