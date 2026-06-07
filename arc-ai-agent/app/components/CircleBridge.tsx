@@ -232,7 +232,7 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
         parsed, ARC_CCTP_DOMAIN,
         ethers.zeroPadValue(wallet, 32),
         cfg.usdcAddress,
-        ethers.ZeroHash, 500n, 0
+        ethers.ZeroHash, 0n, 2000
       );
       await burnTx.wait();
       setSteps(prev => [...prev, `burn: ✓ ${burnTx.hash.slice(0, 14)}...`]);
@@ -347,7 +347,7 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
 
       {/* Info */}
       <div className="bg-white/[0.02] border border-white/[0.05] rounded-xl px-4 py-3 space-y-1.5">
-        <p className="text-[10px] text-gray-500 font-mono">🔐 Circle CCTP v2 · TokenMessengerV2</p>
+        <p className="text-[10px] text-gray-500 font-mono">🔐 Circle CCTP v2 · Standard Transfer (gratis, ~5 menit)</p>
         <p className="text-[10px] text-gray-500 font-mono">⏱ Poll Iris API tiap 5s · max 20 menit</p>
         <p className="text-[10px] text-amber-500/70 font-mono">⚠ Jangan tutup tab selama proses berlangsung</p>
       </div>
