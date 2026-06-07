@@ -161,16 +161,10 @@ async function executeSwap(tokenIn: string, tokenOut: string, amount: string): P
   }
 }
 
-// ─── Bridge (CCTP v2 via API route) ───────────────────────────
+// ─── Bridge (redirect ke Circle CCTP bridge resmi) ────────────
 async function executeBridge(fromChain: string, amount: string): Promise<string> {
-  const res = await fetch("/api/bridge", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ fromChain, amount }),
-  });
-  const data = await res.json();
-  if (!data.txHash) throw new Error(data.error || "Bridge failed");
-  return data.txHash;
+  window.open("https://www.circle.com/multichain-usdc/cctp", "_blank");
+  throw new Error("Redirect to Circle Bridge");
 }
 
 // ─── Cards ────────────────────────────────────────────────────
