@@ -2,51 +2,61 @@
 import { useState } from "react";
 import { ethers } from "ethers";
 
-// ─── Chain name mapping untuk Bridge Kit ─────────────────────
-const CHAIN_NAME_MAP: Record<string, string> = {
-  Ethereum_Sepolia: "Ethereum_Sepolia",
-  Base_Sepolia:     "Base_Sepolia",
-  Arbitrum_Sepolia: "Arbitrum_Sepolia",
-  Avalanche_Fuji:   "Avalanche_Fuji",
-  OP_Sepolia:       "OP_Sepolia",
-};
-
 const BRIDGE_CHAIN_CONFIG: Record<string, {
   chainIdHex: string; name: string; rpc: string; symbol: string;
-  usdcAddress: string;
+  usdcAddress: string; domain: number;
 }> = {
   Ethereum_Sepolia: {
     chainIdHex: "0xaa36a7", name: "Ethereum Sepolia",
     rpc: "https://ethereum-sepolia-rpc.publicnode.com",
     symbol: "ETH", usdcAddress: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+    domain: 0,
   },
   Base_Sepolia: {
     chainIdHex: "0x14a34", name: "Base Sepolia",
     rpc: "https://base-sepolia-rpc.publicnode.com",
     symbol: "ETH", usdcAddress: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    domain: 6,
   },
   Arbitrum_Sepolia: {
     chainIdHex: "0x66eee", name: "Arbitrum Sepolia",
     rpc: "https://sepolia-rollup.arbitrum.io/rpc",
     symbol: "ETH", usdcAddress: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
+    domain: 3,
   },
   Avalanche_Fuji: {
     chainIdHex: "0xa869", name: "Avalanche Fuji",
     rpc: "https://api.avax-test.network/ext/bc/C/rpc",
     symbol: "AVAX", usdcAddress: "0x5425890298aed601595a70AB815c96711a31Bc65",
+    domain: 1,
   },
   OP_Sepolia: {
     chainIdHex: "0xaa37dc", name: "Optimism Sepolia",
     rpc: "https://sepolia.optimism.io",
     symbol: "ETH", usdcAddress: "0x5fd84259d66Cd46123540766Be93DFE6D43130D9",
+    domain: 2,
   },
 };
 
 const ARC_CHAIN_ID_HEX = "0x4cef52";
 const ARC_RPC = "https://rpc.arc.io";
 
+// CCTP v2 addresses (testnet)
+const TOKEN_MESSENGER_V2    = "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA";
+const ARC_MSG_TRANSMITTER   = "0x81D40F21F12A8F0E3252Bccb954D722d4c464B64";
+const IRIS_API              = "https://iris-api-sandbox.circle.com/v2/messages";
+const ARC_CCTP_DOMAIN       = 26;
+
 const USDC_ABI = [
+  "function approve(address,uint256) returns (bool)",
+  "function allowance(address,address) view returns (uint256)",
   "function balanceOf(address) view returns (uint256)",
+];
+const MESSENGER_ABI = [
+  "function depositForBurn(uint256 amount, uint32 destinationDomain, bytes32 mintRecipient, address burnToken, bytes32 destinationCaller, uint256 maxFee, uint32 minFinalityThreshold) returns (uint64)",
+];
+const TRANSMITTER_ABI = [
+  "function receiveMessage(bytes message, bytes attestation) returns (bool)",
 ];
 
 const BRIDGE_CHAINS = [
@@ -71,23 +81,37 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
   const [status, setStatus]         = useState("");
   const [steps, setSteps]           = useState<string[]>([]);
 
+  // ─── Helper: switch wallet ke chain tertentu ───────────────
+  async function switchToChain(chainIdHex: string, name: string, rpc: string, symbol: string) {
+    const eth = (window as any).ethereum;
+    try {
+      await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: chainIdHex }] });
+    } catch (e: any) {
+      if (e.code === 4902 || e.code === -32603) {
+        await eth.request({
+          method: "wallet_addEthereumChain",
+          params: [{ chainId: chainIdHex, chainName: name, rpcUrls: [rpc], nativeCurrency: { name: symbol, symbol, decimals: 18 } }],
+        });
+        // Coba switch lagi setelah add
+        await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: chainIdHex }] });
+      } else {
+        throw e;
+      }
+    }
+    // Tunggu chain benar-benar berganti sebelum lanjut
+    await new Promise(r => setTimeout(r, 600));
+  }
+
+  // ─── Switch + fetch balance saat user pilih chain ─────────
   async function switchAndFetch(chain: string) {
     if (!wallet) return;
     setSwitching(true);
     setSrcBalance("");
     try {
       const cfg = BRIDGE_CHAIN_CONFIG[chain];
+      await switchToChain(cfg.chainIdHex, cfg.name, cfg.rpc, cfg.symbol);
+
       const eth = (window as any).ethereum;
-      try {
-        await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: cfg.chainIdHex }] });
-      } catch (e: any) {
-        if (e.code === 4902) {
-          await eth.request({
-            method: "wallet_addEthereumChain",
-            params: [{ chainId: cfg.chainIdHex, chainName: cfg.name, rpcUrls: [cfg.rpc], nativeCurrency: { name: cfg.symbol, symbol: cfg.symbol, decimals: 18 } }],
-          });
-        }
-      }
       const provider = new ethers.BrowserProvider(eth);
       const usdc = new ethers.Contract(cfg.usdcAddress, USDC_ABI, provider);
       const bal = await usdc.balanceOf(wallet);
@@ -98,126 +122,123 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
     setSwitching(false);
   }
 
+  // ─── Main bridge handler ───────────────────────────────────
   async function handleBridge() {
     if (!amount || !wallet) return;
     setLoading(true);
     setStatus("");
     setSteps([]);
-    await bridgeCCTPManual();
+    await bridgeCCTP();
+    setLoading(false);
   }
 
-  // ─── Fallback: CCTP Manual ────────────────────────────────
-  async function bridgeCCTPManual() {
-    const TOKEN_MESSENGER_V2 = "0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d";
-    const ARC_MESSAGE_TRANSMITTER = "0x81D40F21F12A8F0E3252Bccb954D722d4c464B64";
-    const IRIS_API = "https://iris-api-sandbox.circle.com/v2/messages";
-    const ARC_CCTP_DOMAIN = 26;
-
-    const DOMAIN_MAP: Record<string, number> = {
-      Ethereum_Sepolia: 0, Base_Sepolia: 6,
-      Arbitrum_Sepolia: 3, Avalanche_Fuji: 1, OP_Sepolia: 2,
-    };
-
-    const USDC_ABI2 = [
-      "function approve(address,uint256) returns (bool)",
-      "function allowance(address,address) view returns (uint256)",
-      "function balanceOf(address) view returns (uint256)",
-    ];
-    const MESSENGER_ABI = [
-      "function depositForBurn(uint256,uint32,bytes32,address,bytes32,uint256,uint32) returns (uint64)",
-    ];
-    const TRANSMITTER_ABI = [
-      "function receiveMessage(bytes,bytes) returns (bool)",
-    ];
-
+  // ─── CCTP v2 Bridge: Burn → Poll Iris → Mint ──────────────
+  async function bridgeCCTP() {
     try {
       const cfg = BRIDGE_CHAIN_CONFIG[fromChain];
       const eth = (window as any).ethereum;
-      const provider = new ethers.BrowserProvider(eth);
-      const signer = await provider.getSigner();
       const parsed = ethers.parseUnits(amount, 6);
 
-      // Cek saldo
-      const usdc = new ethers.Contract(cfg.usdcAddress, USDC_ABI2, signer);
+      // ── Step 1: Pastikan di source chain, lalu cek saldo ──
+      setStatus("⏳ Switching ke " + cfg.name + "...");
+      await switchToChain(cfg.chainIdHex, cfg.name, cfg.rpc, cfg.symbol);
+
+      const provider = new ethers.BrowserProvider(eth);
+      const signer   = await provider.getSigner();
+      const usdc     = new ethers.Contract(cfg.usdcAddress, USDC_ABI, signer);
+
       const bal = await usdc.balanceOf(wallet);
       if (bal < parsed) {
-        setStatus(`❌ Saldo tidak cukup. Saldo: ${ethers.formatUnits(bal, 6)} USDC`);
-        setLoading(false);
+        setStatus(`❌ Saldo tidak cukup. Saldo kamu: ${ethers.formatUnits(bal, 6)} USDC`);
         return;
       }
 
-      // Approve
+      // ── Step 2: Approve ────────────────────────────────────
       const allowance = await usdc.allowance(wallet, TOKEN_MESSENGER_V2);
       if (allowance < parsed) {
         setStatus("⏳ Approving USDC... (confirm di wallet)");
-        await (await usdc.approve(TOKEN_MESSENGER_V2, parsed)).wait();
+        const approveTx = await usdc.approve(TOKEN_MESSENGER_V2, parsed);
+        await approveTx.wait();
+        setSteps(["approve: ✓"]);
       }
 
-      // Burn
+      // ── Step 3: Burn via TokenMessengerV2 ─────────────────
       setStatus("⏳ Burning USDC via CCTP v2... (confirm di wallet)");
       const messenger = new ethers.Contract(TOKEN_MESSENGER_V2, MESSENGER_ABI, signer);
       const burnTx = await messenger.depositForBurn(
-        parsed, ARC_CCTP_DOMAIN, ethers.zeroPadValue(wallet, 32),
-        cfg.usdcAddress, ethers.ZeroHash, 0n, 1000
+        parsed,
+        ARC_CCTP_DOMAIN,
+        ethers.zeroPadValue(wallet, 32),
+        cfg.usdcAddress,
+        ethers.ZeroHash, // destinationCaller = any
+        0n,              // maxFee
+        1000             // minFinalityThreshold (fast)
       );
       await burnTx.wait();
-      setSteps(["burn: success · " + burnTx.hash.slice(0, 12) + "..."]);
+      setSteps(prev => [...prev, `burn: ✓ ${burnTx.hash.slice(0, 14)}...`]);
 
-      // Poll attestation
-      setStatus("⏳ Menunggu attestation Circle Iris...");
-      let attestData = null;
-      for (let i = 0; i < 60; i++) {
-        setStatus(`⏳ Polling attestation... (${i + 1}/60)`);
+      // ── Step 4: Poll Circle Iris API ───────────────────────
+      setStatus("⏳ Menunggu attestation dari Circle...");
+      let attestData: any = null;
+
+      for (let i = 0; i < 72; i++) {
+        setStatus(`⏳ Polling attestation... (${i + 1}/72) — jangan tutup tab!`);
         try {
-          const res = await fetch(`${IRIS_API}/${DOMAIN_MAP[fromChain]}?transactionHash=${burnTx.hash}`);
+          const res = await fetch(`${IRIS_API}/${cfg.domain}?transactionHash=${burnTx.hash}`);
           if (res.ok) {
             const data = await res.json();
-            const msg = data?.messages?.[0];
-            if (msg?.status === "complete" && msg?.attestation) {
+            const msg  = data?.messages?.[0];
+            if (msg?.status === "complete" && msg?.attestation && msg?.message) {
               attestData = msg;
               break;
             }
           }
-        } catch {}
+        } catch {
+          // Iris API kadang timeout, lanjut polling
+        }
         await new Promise(r => setTimeout(r, 5000));
       }
 
       if (!attestData) {
-        setStatus(`⚠ Attestation timeout. Burn tx: ${burnTx.hash}`);
-        setLoading(false);
+        setStatus(
+          `⚠ Attestation timeout (6 menit).\nBurn tx: ${burnTx.hash}\n\nSiman tx hash ini — kamu bisa claim manual nanti di Circle CCTP bridge.`
+        );
         return;
       }
 
-      // Switch ke ARC & mint
-      setStatus("⏳ Switching ke ARC untuk mint...");
-      try {
-        await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: ARC_CHAIN_ID_HEX }] });
-      } catch (e: any) {
-        if (e.code === 4902) {
-          await eth.request({
-            method: "wallet_addEthereumChain",
-            params: [{ chainId: ARC_CHAIN_ID_HEX, chainName: "ARC Testnet", rpcUrls: [ARC_RPC], nativeCurrency: { name: "ARC", symbol: "ARC", decimals: 18 } }],
-          });
-        }
-      }
+      setSteps(prev => [...prev, "attestation: ✓"]);
 
-      const arcProvider = new ethers.BrowserProvider(eth);
-      const arcSigner = await arcProvider.getSigner();
-      const transmitter = new ethers.Contract(ARC_MESSAGE_TRANSMITTER, TRANSMITTER_ABI, arcSigner);
+      // ── Step 5: Switch ke ARC ──────────────────────────────
+      setStatus("⏳ Switching ke ARC Testnet...");
+      await switchToChain(ARC_CHAIN_ID_HEX, "ARC Testnet", ARC_RPC, "ARC");
 
+      // ── Step 6: Mint di ARC ────────────────────────────────
       setStatus("⏳ Minting USDC di ARC... (confirm di wallet)");
-      const mintTx = await transmitter.receiveMessage(attestData.message, attestData.attestation);
+      const arcProvider    = new ethers.BrowserProvider(eth);
+      const arcSigner      = await arcProvider.getSigner();
+      const transmitter    = new ethers.Contract(ARC_MSG_TRANSMITTER, TRANSMITTER_ABI, arcSigner);
+
+      const mintTx = await transmitter.receiveMessage(
+        attestData.message,
+        attestData.attestation
+      );
       await mintTx.wait();
 
-      setSteps(prev => [...prev, "mint: success · " + mintTx.hash.slice(0, 12) + "..."]);
-      setStatus("✅ Bridge selesai! " + amount + " USDC sudah di ARC Testnet!");
+      setSteps(prev => [...prev, `mint: ✓ ${mintTx.hash.slice(0, 14)}...`]);
+      setStatus(`✅ Bridge selesai! ${amount} USDC sudah masuk ARC Testnet!`);
       setAmount("");
+      setSrcBalance("");
       onSuccess(mintTx.hash);
+
     } catch (e: any) {
-      const msg = e?.reason || e?.message || "Bridge failed";
-      setStatus("❌ " + msg.slice(0, 200));
+      // User reject = code 4001
+      if (e?.code === 4001 || e?.code === "ACTION_REJECTED") {
+        setStatus("❌ Dibatalkan oleh user.");
+      } else {
+        const msg = e?.reason || e?.data?.message || e?.message || "Bridge failed";
+        setStatus("❌ " + String(msg).slice(0, 250));
+      }
     }
-    setLoading(false);
   }
 
   return (
@@ -265,7 +286,7 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
           <div className="w-7 h-7 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 font-bold text-xs">A</div>
           <div>
             <p className="text-white font-mono text-xs font-bold">ARC Testnet</p>
-            <p className="text-[10px] text-gray-600 font-mono">CCTP Domain 26 · Auto-claim</p>
+            <p className="text-[10px] text-gray-600 font-mono">CCTP v2 Domain 26 · Auto-mint</p>
           </div>
         </div>
         <span className="text-[10px] text-cyan-400/70 font-mono bg-cyan-500/8 border border-cyan-500/15 px-2 py-1 rounded-lg">Auto ✓</span>
@@ -288,8 +309,8 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
 
       {/* Info */}
       <div className="bg-white/[0.02] border border-white/[0.05] rounded-xl px-4 py-3 space-y-1.5">
-        <p className="text-[10px] text-gray-500 font-mono">🔐 Circle CCTP v2 · Auto attestation + mint</p>
-        <p className="text-[10px] text-gray-500 font-mono">⏱ Polling Iris API tiap 5 detik · max 5 menit</p>
+        <p className="text-[10px] text-gray-500 font-mono">🔐 Circle CCTP v2 · TokenMessengerV2</p>
+        <p className="text-[10px] text-gray-500 font-mono">⏱ Poll Iris API tiap 5s · timeout 6 menit</p>
         <p className="text-[10px] text-amber-500/70 font-mono">⚠ Jangan tutup tab selama proses berlangsung</p>
       </div>
 
