@@ -153,13 +153,25 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
         return;
       }
 
-      // ── Step 2: Approve ────────────────────────────────────
+      // ── Step 2: Approve (selalu approve max supaya tidak mismatch) ─
+      setStatus("⏳ Checking allowance...");
       const allowance = await usdc.allowance(wallet, TOKEN_MESSENGER_V2);
       if (allowance < parsed) {
         setStatus("⏳ Approving USDC... (confirm di wallet)");
-        const approveTx = await usdc.approve(TOKEN_MESSENGER_V2, parsed);
-        await approveTx.wait();
+        // Approve max uint256 supaya tidak perlu approve lagi ke depannya
+        const MAX = ethers.MaxUint256;
+        const approveTx = await usdc.approve(TOKEN_MESSENGER_V2, MAX);
+        setStatus("⏳ Menunggu approve confirmed...");
+        await approveTx.wait(2); // tunggu 2 konfirmasi
+        // Verifikasi allowance benar-benar sudah terupdate
+        const newAllowance = await usdc.allowance(wallet, TOKEN_MESSENGER_V2);
+        if (newAllowance < parsed) {
+          setStatus("❌ Approve gagal — allowance masih kurang. Coba lagi.");
+          return;
+        }
         setSteps(["approve: ✓"]);
+      } else {
+        setSteps(["approve: sudah ada ✓"]);
       }
 
       // ── Step 3: Burn via TokenMessengerV2 ─────────────────
