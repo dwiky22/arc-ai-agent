@@ -103,82 +103,7 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
     setLoading(true);
     setStatus("");
     setSteps([]);
-
-    try {
-      const cfg = BRIDGE_CHAIN_CONFIG[fromChain];
-      const eth = (window as any).ethereum;
-
-      // Step 1: Switch ke source chain
-      setStatus("⏳ Switching to " + cfg.name + "...");
-      try {
-        await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: cfg.chainIdHex }] });
-      } catch (e: any) {
-        if (e.code === 4902) {
-          await eth.request({
-            method: "wallet_addEthereumChain",
-            params: [{ chainId: cfg.chainIdHex, chainName: cfg.name, rpcUrls: [cfg.rpc], nativeCurrency: { name: cfg.symbol, symbol: cfg.symbol, decimals: 18 } }],
-          });
-        } else throw e;
-      }
-
-      // Step 2: Import Bridge Kit + adapter
-      setStatus("⏳ Loading Bridge Kit...");
-      const [{ BridgeKit }, { createEthersAdapterFromProvider }] = await Promise.all([
-        import("@circle-fin/bridge-kit"),
-        import("@circle-fin/adapter-ethers-v6"),
-      ]);
-
-      // Step 3: Buat adapter dari browser wallet (MetaMask)
-      // Bridge Kit butuh raw EIP-1193 provider (window.ethereum), bukan BrowserProvider
-      const adapter = await createEthersAdapterFromProvider({ provider: eth });
-
-      const kit = new BridgeKit();
-
-      // Step 4: Jalankan bridge
-      setStatus("⏳ Bridging " + amount + " USDC via Bridge Kit... (confirm di wallet)");
-
-      const result = await kit.bridge({
-        from: { adapter, chain: CHAIN_NAME_MAP[fromChain] as any },
-        to:   { adapter, chain: "Arc_Testnet" as any },
-        amount,
-        config: { transferSpeed: "FAST" },
-      });
-
-      // Tampil semua step
-      const stepLogs: string[] = [];
-      const resultSteps = (result as any)?.steps || [];
-      for (const s of resultSteps) {
-        const msg = `${s.name}: ${s.state}${s.txHash ? " · " + s.txHash.slice(0, 12) + "..." : ""}`;
-        stepLogs.push(msg);
-      }
-      setSteps(stepLogs);
-
-      // Cari mint tx hash (step terakhir di ARC)
-      const lastStep = resultSteps[resultSteps.length - 1];
-      const finalHash = lastStep?.txHash || lastStep?.data?.txHash || "";
-
-      setStatus("✅ Bridge selesai! " + amount + " USDC sudah di ARC Testnet!");
-      setAmount("");
-      if (finalHash) onSuccess(finalHash);
-
-    } catch (e: any) {
-      console.error("Bridge Kit error:", e);
-
-      // Kalau Bridge Kit tidak tersedia, fallback ke CCTP manual
-      if (e?.message?.includes("Cannot find module") || e?.message?.includes("Failed to resolve")) {
-        setStatus("⚠ Bridge Kit tidak tersedia. Menggunakan CCTP manual...");
-        await bridgeCCTPManual();
-        return;
-      }
-
-      const msg = e?.reason || e?.shortMessage || e?.message || "Bridge failed";
-      if (msg.includes("user rejected")) {
-        setStatus("❌ Transaksi dibatalkan.");
-      } else {
-        setStatus("❌ " + msg.slice(0, 200));
-      }
-    }
-    setLoading(false);
+    await bridgeCCTPManual();
   }
 
   // ─── Fallback: CCTP Manual ────────────────────────────────
@@ -363,8 +288,8 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
 
       {/* Info */}
       <div className="bg-white/[0.02] border border-white/[0.05] rounded-xl px-4 py-3 space-y-1.5">
-        <p className="text-[10px] text-gray-500 font-mono">🔐 Circle Bridge Kit · CCTP v2 · Auto attestation</p>
-        <p className="text-[10px] text-gray-500 font-mono">⚡ FAST mode — Orbit relayer handle mint otomatis</p>
+        <p className="text-[10px] text-gray-500 font-mono">🔐 Circle CCTP v2 · Auto attestation + mint</p>
+        <p className="text-[10px] text-gray-500 font-mono">⏱ Polling Iris API tiap 5 detik · max 5 menit</p>
         <p className="text-[10px] text-amber-500/70 font-mono">⚠ Jangan tutup tab selama proses berlangsung</p>
       </div>
 
