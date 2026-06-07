@@ -38,14 +38,12 @@ const BRIDGE_CHAIN_CONFIG: Record<string, {
   },
 };
 
-const ARC_CHAIN_ID_HEX = "0x4cef52";
-const ARC_RPC = "https://rpc.arc.io";
-
-// CCTP v2 addresses (testnet)
-const TOKEN_MESSENGER_V2    = "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA";
-const ARC_MSG_TRANSMITTER   = "0x81D40F21F12A8F0E3252Bccb954D722d4c464B64";
-const IRIS_API              = "https://iris-api-sandbox.circle.com/v2/messages";
-const ARC_CCTP_DOMAIN       = 26;
+const ARC_CHAIN_ID_HEX   = "0x4cef52";
+const ARC_RPC             = "https://rpc.arc.io";
+const TOKEN_MESSENGER_V2  = "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA";
+const ARC_MSG_TRANSMITTER = "0x81D40F21F12A8F0E3252Bccb954D722d4c464B64";
+const IRIS_API            = "https://iris-api-sandbox.circle.com/v2/messages";
+const ARC_CCTP_DOMAIN     = 26;
 
 const USDC_ABI = [
   "function approve(address,uint256) returns (bool)",
@@ -73,15 +71,21 @@ interface Props {
 }
 
 export default function CircleBridge({ wallet, onSuccess }: Props) {
-  const [fromChain, setFromChain]   = useState("Base_Sepolia");
-  const [amount, setAmount]         = useState("");
-  const [srcBalance, setSrcBalance] = useState("");
-  const [loading, setLoading]       = useState(false);
-  const [switching, setSwitching]   = useState(false);
-  const [status, setStatus]         = useState("");
-  const [steps, setSteps]           = useState<string[]>([]);
+  const [fromChain, setFromChain]     = useState("Base_Sepolia");
+  const [amount, setAmount]           = useState("");
+  const [srcBalance, setSrcBalance]   = useState("");
+  const [loading, setLoading]         = useState(false);
+  const [switching, setSwitching]     = useState(false);
+  const [status, setStatus]           = useState("");
+  const [steps, setSteps]             = useState<string[]>([]);
 
-  // ─── Helper: switch wallet ke chain tertentu ───────────────
+  // ─── Claim manual state ────────────────────────────────────
+  const [showClaim, setShowClaim]     = useState(false);
+  const [claimTxHash, setClaimTxHash] = useState("");
+  const [claimChain, setClaimChain]   = useState("Base_Sepolia");
+  const [claimLoading, setClaimLoading] = useState(false);
+
+  // ─── Helper: switch chain ──────────────────────────────────
   async function switchToChain(chainIdHex: string, name: string, rpc: string, symbol: string) {
     const eth = (window as any).ethereum;
     try {
@@ -92,17 +96,15 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
           method: "wallet_addEthereumChain",
           params: [{ chainId: chainIdHex, chainName: name, rpcUrls: [rpc], nativeCurrency: { name: symbol, symbol, decimals: 18 } }],
         });
-        // Coba switch lagi setelah add
         await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: chainIdHex }] });
       } else {
         throw e;
       }
     }
-    // Tunggu chain benar-benar berganti sebelum lanjut
     await new Promise(r => setTimeout(r, 600));
   }
 
-  // ─── Switch + fetch balance saat user pilih chain ─────────
+  // ─── Switch + fetch balance ────────────────────────────────
   async function switchAndFetch(chain: string) {
     if (!wallet) return;
     setSwitching(true);
@@ -110,7 +112,6 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
     try {
       const cfg = BRIDGE_CHAIN_CONFIG[chain];
       await switchToChain(cfg.chainIdHex, cfg.name, cfg.rpc, cfg.symbol);
-
       const eth = (window as any).ethereum;
       const provider = new ethers.BrowserProvider(eth);
       const usdc = new ethers.Contract(cfg.usdcAddress, USDC_ABI, provider);
@@ -122,24 +123,75 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
     setSwitching(false);
   }
 
-  // ─── Main bridge handler ───────────────────────────────────
+  // ─── Poll Iris & mint — shared by bridge + claim manual ───
+  async function pollAndMint(sourceDomain: number, txHash: string, maxPolls = 240) {
+    let attestData: any = null;
+    for (let i = 0; i < maxPolls; i++) {
+      setStatus(`⏳ Polling attestation... (${i + 1}/${maxPolls}) — jangan tutup tab!`);
+      try {
+        const res = await fetch(`${IRIS_API}/${sourceDomain}?transactionHash=${txHash}`);
+        if (res.ok) {
+          const data = await res.json();
+          const msg  = data?.messages?.[0];
+          if (msg?.status === "complete" && msg?.attestation && msg?.message) {
+            attestData = msg;
+            break;
+          }
+          // Log delay reason kalau ada
+          if (msg?.delayReason) {
+            setStatus(`⏳ Polling... (${i + 1}/${maxPolls}) — delay: ${msg.delayReason}`);
+          }
+        }
+      } catch {
+        // Iris kadang timeout, lanjut
+      }
+      await new Promise(r => setTimeout(r, 5000));
+    }
+
+    if (!attestData) {
+      setStatus(
+        `⚠ Attestation belum ready setelah ${Math.floor(maxPolls * 5 / 60)} menit.\n` +
+        `Burn tx: ${txHash}\n\n` +
+        `Gunakan tombol "Claim Manual" di bawah dengan tx hash ini untuk claim nanti.`
+      );
+      setShowClaim(true);
+      setClaimTxHash(txHash);
+      return false;
+    }
+
+    // Switch ke ARC & mint
+    setStatus("⏳ Attestation ready! Switching ke ARC...");
+    await switchToChain(ARC_CHAIN_ID_HEX, "ARC Testnet", ARC_RPC, "ARC");
+
+    setStatus("⏳ Minting USDC di ARC... (confirm di wallet)");
+    const eth        = (window as any).ethereum;
+    const arcProvider = new ethers.BrowserProvider(eth);
+    const arcSigner   = await arcProvider.getSigner();
+    const transmitter = new ethers.Contract(ARC_MSG_TRANSMITTER, TRANSMITTER_ABI, arcSigner);
+
+    const mintTx = await transmitter.receiveMessage(attestData.message, attestData.attestation);
+    await mintTx.wait();
+
+    setSteps(prev => [...prev, `mint: ✓ ${mintTx.hash.slice(0, 14)}...`]);
+    setStatus(`✅ Bridge selesai! USDC sudah masuk ARC Testnet!`);
+    onSuccess(mintTx.hash);
+    return true;
+  }
+
+  // ─── Main bridge flow ──────────────────────────────────────
   async function handleBridge() {
     if (!amount || !wallet) return;
     setLoading(true);
     setStatus("");
     setSteps([]);
-    await bridgeCCTP();
-    setLoading(false);
-  }
+    setShowClaim(false);
 
-  // ─── CCTP v2 Bridge: Burn → Poll Iris → Mint ──────────────
-  async function bridgeCCTP() {
     try {
-      const cfg = BRIDGE_CHAIN_CONFIG[fromChain];
-      const eth = (window as any).ethereum;
+      const cfg    = BRIDGE_CHAIN_CONFIG[fromChain];
+      const eth    = (window as any).ethereum;
       const parsed = ethers.parseUnits(amount, 6);
 
-      // ── Step 1: Pastikan di source chain, lalu cek saldo ──
+      // Step 1: Switch ke source chain & cek saldo
       setStatus("⏳ Switching ke " + cfg.name + "...");
       await switchToChain(cfg.chainIdHex, cfg.name, cfg.rpc, cfg.symbol);
 
@@ -150,23 +202,22 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
       const bal = await usdc.balanceOf(wallet);
       if (bal < parsed) {
         setStatus(`❌ Saldo tidak cukup. Saldo kamu: ${ethers.formatUnits(bal, 6)} USDC`);
+        setLoading(false);
         return;
       }
 
-      // ── Step 2: Approve (selalu approve max supaya tidak mismatch) ─
+      // Step 2: Approve MaxUint256
       setStatus("⏳ Checking allowance...");
       const allowance = await usdc.allowance(wallet, TOKEN_MESSENGER_V2);
       if (allowance < parsed) {
         setStatus("⏳ Approving USDC... (confirm di wallet)");
-        // Approve max uint256 supaya tidak perlu approve lagi ke depannya
-        const MAX = ethers.MaxUint256;
-        const approveTx = await usdc.approve(TOKEN_MESSENGER_V2, MAX);
+        const approveTx = await usdc.approve(TOKEN_MESSENGER_V2, ethers.MaxUint256);
         setStatus("⏳ Menunggu approve confirmed...");
-        await approveTx.wait(2); // tunggu 2 konfirmasi
-        // Verifikasi allowance benar-benar sudah terupdate
+        await approveTx.wait(2);
         const newAllowance = await usdc.allowance(wallet, TOKEN_MESSENGER_V2);
         if (newAllowance < parsed) {
-          setStatus("❌ Approve gagal — allowance masih kurang. Coba lagi.");
+          setStatus("❌ Approve gagal — coba lagi.");
+          setLoading(false);
           return;
         }
         setSteps(["approve: ✓"]);
@@ -174,76 +225,22 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
         setSteps(["approve: sudah ada ✓"]);
       }
 
-      // ── Step 3: Burn via TokenMessengerV2 ─────────────────
+      // Step 3: Burn
       setStatus("⏳ Burning USDC via CCTP v2... (confirm di wallet)");
       const messenger = new ethers.Contract(TOKEN_MESSENGER_V2, MESSENGER_ABI, signer);
       const burnTx = await messenger.depositForBurn(
-        parsed,
-        ARC_CCTP_DOMAIN,
+        parsed, ARC_CCTP_DOMAIN,
         ethers.zeroPadValue(wallet, 32),
         cfg.usdcAddress,
-        ethers.ZeroHash, // destinationCaller = any
-        0n,              // maxFee
-        1000             // minFinalityThreshold (fast)
+        ethers.ZeroHash, 0n, 1000
       );
       await burnTx.wait();
       setSteps(prev => [...prev, `burn: ✓ ${burnTx.hash.slice(0, 14)}...`]);
 
-      // ── Step 4: Poll Circle Iris API ───────────────────────
-      setStatus("⏳ Menunggu attestation dari Circle...");
-      let attestData: any = null;
-
-      for (let i = 0; i < 72; i++) {
-        setStatus(`⏳ Polling attestation... (${i + 1}/72) — jangan tutup tab!`);
-        try {
-          const res = await fetch(`${IRIS_API}/${cfg.domain}?transactionHash=${burnTx.hash}`);
-          if (res.ok) {
-            const data = await res.json();
-            const msg  = data?.messages?.[0];
-            if (msg?.status === "complete" && msg?.attestation && msg?.message) {
-              attestData = msg;
-              break;
-            }
-          }
-        } catch {
-          // Iris API kadang timeout, lanjut polling
-        }
-        await new Promise(r => setTimeout(r, 5000));
-      }
-
-      if (!attestData) {
-        setStatus(
-          `⚠ Attestation timeout (6 menit).\nBurn tx: ${burnTx.hash}\n\nSiman tx hash ini — kamu bisa claim manual nanti di Circle CCTP bridge.`
-        );
-        return;
-      }
-
-      setSteps(prev => [...prev, "attestation: ✓"]);
-
-      // ── Step 5: Switch ke ARC ──────────────────────────────
-      setStatus("⏳ Switching ke ARC Testnet...");
-      await switchToChain(ARC_CHAIN_ID_HEX, "ARC Testnet", ARC_RPC, "ARC");
-
-      // ── Step 6: Mint di ARC ────────────────────────────────
-      setStatus("⏳ Minting USDC di ARC... (confirm di wallet)");
-      const arcProvider    = new ethers.BrowserProvider(eth);
-      const arcSigner      = await arcProvider.getSigner();
-      const transmitter    = new ethers.Contract(ARC_MSG_TRANSMITTER, TRANSMITTER_ABI, arcSigner);
-
-      const mintTx = await transmitter.receiveMessage(
-        attestData.message,
-        attestData.attestation
-      );
-      await mintTx.wait();
-
-      setSteps(prev => [...prev, `mint: ✓ ${mintTx.hash.slice(0, 14)}...`]);
-      setStatus(`✅ Bridge selesai! ${amount} USDC sudah masuk ARC Testnet!`);
-      setAmount("");
-      setSrcBalance("");
-      onSuccess(mintTx.hash);
+      // Step 4+5+6: Poll Iris → switch ARC → mint (20 menit max)
+      await pollAndMint(cfg.domain, burnTx.hash, 240);
 
     } catch (e: any) {
-      // User reject = code 4001
       if (e?.code === 4001 || e?.code === "ACTION_REJECTED") {
         setStatus("❌ Dibatalkan oleh user.");
       } else {
@@ -251,6 +248,35 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
         setStatus("❌ " + String(msg).slice(0, 250));
       }
     }
+    setLoading(false);
+    setAmount("");
+    setSrcBalance("");
+  }
+
+  // ─── Claim manual (untuk burn tx yang sudah timeout) ──────
+  async function handleClaimManual() {
+    if (!claimTxHash || !wallet) return;
+    setClaimLoading(true);
+    setStatus("");
+    setSteps([`claim manual: tx ${claimTxHash.slice(0, 14)}...`]);
+
+    try {
+      const cfg = BRIDGE_CHAIN_CONFIG[claimChain];
+      // Poll dengan 240 iterasi lagi (20 menit)
+      const ok = await pollAndMint(cfg.domain, claimTxHash, 240);
+      if (ok) {
+        setShowClaim(false);
+        setClaimTxHash("");
+      }
+    } catch (e: any) {
+      if (e?.code === 4001 || e?.code === "ACTION_REJECTED") {
+        setStatus("❌ Dibatalkan oleh user.");
+      } else {
+        const msg = e?.reason || e?.data?.message || e?.message || "Claim failed";
+        setStatus("❌ " + String(msg).slice(0, 250));
+      }
+    }
+    setClaimLoading(false);
   }
 
   return (
@@ -322,16 +348,63 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
       {/* Info */}
       <div className="bg-white/[0.02] border border-white/[0.05] rounded-xl px-4 py-3 space-y-1.5">
         <p className="text-[10px] text-gray-500 font-mono">🔐 Circle CCTP v2 · TokenMessengerV2</p>
-        <p className="text-[10px] text-gray-500 font-mono">⏱ Poll Iris API tiap 5s · timeout 6 menit</p>
+        <p className="text-[10px] text-gray-500 font-mono">⏱ Poll Iris API tiap 5s · max 20 menit</p>
         <p className="text-[10px] text-amber-500/70 font-mono">⚠ Jangan tutup tab selama proses berlangsung</p>
       </div>
 
-      <button onClick={handleBridge} disabled={!wallet || !amount || loading}
+      <button onClick={handleBridge} disabled={!wallet || !amount || loading || claimLoading}
         className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-25 disabled:cursor-not-allowed text-white font-bold py-3.5 rounded-xl font-mono text-xs transition-all active:scale-[0.99] flex items-center justify-center gap-2 shadow-lg shadow-blue-900/30">
         {loading
           ? <><div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"/>Bridging...</>
           : <>⬡ Bridge {amount || "0"} USDC → ARC</>}
       </button>
+
+      {/* ── Claim Manual Panel ─────────────────────────────── */}
+      <div>
+        <button onClick={() => setShowClaim(v => !v)}
+          className="text-[10px] text-gray-600 hover:text-gray-400 font-mono transition-colors underline underline-offset-2">
+          {showClaim ? "▲ Tutup claim manual" : "▼ Claim manual (burn sudah tapi belum mint?)"}
+        </button>
+
+        {showClaim && (
+          <div className="mt-3 bg-amber-500/5 border border-amber-500/20 rounded-xl p-4 space-y-3">
+            <p className="text-[10px] text-amber-400/80 font-mono">Paste burn tx hash dari chain asal untuk claim USDC di ARC</p>
+
+            {/* Chain asal */}
+            <div>
+              <label className="text-[10px] text-gray-500 font-mono block mb-1.5">Source chain burn tx</label>
+              <div className="grid grid-cols-2 gap-1">
+                {BRIDGE_CHAINS.map(c => (
+                  <button key={c.value} onClick={() => setClaimChain(c.value)}
+                    className={`text-[10px] font-mono px-2 py-1.5 rounded-lg border transition-all ${
+                      claimChain === c.value
+                        ? "bg-amber-500/10 border-amber-500/30 text-amber-300"
+                        : "bg-white/[0.02] border-white/[0.05] text-gray-500 hover:text-gray-300"
+                    }`}>
+                    {c.icon} {c.label.split(" ")[0]}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Tx hash input */}
+            <input
+              value={claimTxHash}
+              onChange={e => setClaimTxHash(e.target.value)}
+              placeholder="0x172f711cab2d..."
+              className="w-full bg-white/[0.03] border border-white/[0.08] focus:border-amber-500/40 text-white rounded-xl px-3 py-2 text-[11px] font-mono outline-none transition-all placeholder:text-gray-700"
+            />
+
+            <button onClick={handleClaimManual}
+              disabled={!claimTxHash || !wallet || claimLoading || loading}
+              className="w-full bg-amber-600 hover:bg-amber-500 disabled:opacity-25 disabled:cursor-not-allowed text-white font-bold py-2.5 rounded-xl font-mono text-[11px] transition-all flex items-center justify-center gap-2">
+              {claimLoading
+                ? <><div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"/>Claiming...</>
+                : <>🔄 Claim USDC di ARC</>}
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* Steps log */}
       {steps.length > 0 && (
