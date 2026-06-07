@@ -4,8 +4,9 @@ import dynamic from "next/dynamic";
 import { ethers } from "ethers";
 import { switchToArc } from "@/lib/arc-chain";
 
-// Load CircleSwap only on client side (no SSR)
+// Load CircleSwap and CircleBridge only on client side (no SSR)
 const CircleSwap = dynamic(() => import("./components/CircleSwap"), { ssr: false });
+const CircleBridge = dynamic(() => import("./components/CircleBridge"), { ssr: false });
 
 // ─── ABIs ─────────────────────────────────────────────────────
 const USDC_ABI = [
@@ -897,22 +898,12 @@ export default function Home() {
                     <p className="text-[11px] text-gray-600 mt-0.5 font-mono">Circle CCTP v2 · Powered by Circle</p>
                   </div>
                 </div>
-                {/* iframe Circle CCTP Bridge */}
-                <div className="p-4 space-y-3">
-                  <div className="bg-blue-500/5 border border-blue-500/15 rounded-xl px-4 py-3 flex items-center gap-2">
-                    <span className="text-blue-400 text-xs">ⓘ</span>
-                    <p className="text-[11px] text-gray-400 font-mono">Bridge powered by Circle CCTP v2 — connect wallet di bawah untuk mulai</p>
-                  </div>
-                  <div className="rounded-2xl overflow-hidden border border-white/[0.07]" style={{height:"600px"}}>
-                    <iframe
-                      src="https://www.circle.com/multichain-usdc/cctp"
-                      className="w-full h-full"
-                      style={{border:"none", background:"#000"}}
-                      title="Circle CCTP Bridge"
-                      allow="clipboard-write"
-                    />
-                  </div>
-                </div>
+                <CircleBridge
+                  wallet={wallet}
+                  onSuccess={(hash) => {
+                    setTxCount(c=>c+1);
+                  }}
+                />
               </div>
 
               {/* Quick links */}
