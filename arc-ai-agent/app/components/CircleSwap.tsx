@@ -23,8 +23,8 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
   const [status, setStatus]       = useState("");
   const [steps, setSteps]         = useState<string[]>([]);
 
-  const tokenIn  = direction === "USDC_EURC" ? "USDC" : "EURC";
-  const tokenOut = direction === "USDC_EURC" ? "EURC" : "USDC";
+  const tokenIn  = (direction === "USDC_EURC" ? "USDC" : "EURC") as "USDC" | "EURC";
+  const tokenOut = (direction === "USDC_EURC" ? "EURC" : "USDC") as "EURC" | "USDC";
   const addrIn   = direction === "USDC_EURC" ? USDC_ADDRESS : EURC_ADDRESS;
 
   async function ensureARC() {
@@ -71,7 +71,7 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
 
       setStatus("⏳ Estimating swap...");
       const estimate = await kit.estimate({
-        from: { adapter, chain: "Arc_Testnet" },
+        from: { adapter, chain: "Arc_Testnet" as const },
         tokenIn,
         tokenOut,
         amountIn: amount,
@@ -81,7 +81,7 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
 
       setStatus(`⏳ Swapping ${amount} ${tokenIn} → ${tokenOut}... (confirm di wallet)`);
       const result = await kit.swap({
-        from: { adapter, chain: "Arc_Testnet" },
+        from: { adapter, chain: "Arc_Testnet" as const },
         tokenIn,
         tokenOut,
         amountIn: amount,

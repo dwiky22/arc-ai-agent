@@ -5,11 +5,11 @@ import { BridgeKit } from "@circle-fin/bridge-kit";
 import { createEthersAdapterFromProvider } from "@circle-fin/adapter-ethers-v6";
 
 const BRIDGE_CHAINS = [
-  { value: "Ethereum_Sepolia", label: "Ethereum Sepolia", icon: "Ξ", kitName: "Ethereum_Sepolia", usdcAddress: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", chainIdHex: "0xaa36a7", rpc: "https://ethereum-sepolia-rpc.publicnode.com" },
-  { value: "Base_Sepolia",     label: "Base Sepolia",     icon: "B", kitName: "Base_Sepolia",     usdcAddress: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", chainIdHex: "0x14a34",  rpc: "https://base-sepolia-rpc.publicnode.com"  },
-  { value: "Arbitrum_Sepolia", label: "Arbitrum Sepolia", icon: "A", kitName: "Arbitrum_Sepolia", usdcAddress: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d", chainIdHex: "0x66eee",  rpc: "https://sepolia-rollup.arbitrum.io/rpc"   },
-  { value: "Avalanche_Fuji",   label: "Avalanche Fuji",   icon: "▲", kitName: "Avalanche_Fuji",   usdcAddress: "0x5425890298aed601595a70AB815c96711a31Bc65", chainIdHex: "0xa869",   rpc: "https://api.avax-test.network/ext/bc/C/rpc" },
-  { value: "OP_Sepolia",       label: "Optimism Sepolia", icon: "O", kitName: "OP_Sepolia",       usdcAddress: "0x5fd84259d66Cd46123540766Be93DFE6D43130D9", chainIdHex: "0xaa37dc", rpc: "https://sepolia.optimism.io"              },
+  { value: "Ethereum_Sepolia", label: "Ethereum Sepolia", icon: "Ξ", kitName: "Ethereum_Sepolia" as const, usdcAddress: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", chainIdHex: "0xaa36a7", rpc: "https://ethereum-sepolia-rpc.publicnode.com" },
+  { value: "Base_Sepolia",     label: "Base Sepolia",     icon: "B", kitName: "Base_Sepolia"     as const, usdcAddress: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", chainIdHex: "0x14a34",  rpc: "https://base-sepolia-rpc.publicnode.com"  },
+  { value: "Arbitrum_Sepolia", label: "Arbitrum Sepolia", icon: "A", kitName: "Arbitrum_Sepolia" as const, usdcAddress: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d", chainIdHex: "0x66eee",  rpc: "https://sepolia-rollup.arbitrum.io/rpc"   },
+  { value: "Avalanche_Fuji",   label: "Avalanche Fuji",   icon: "▲", kitName: "Avalanche_Fuji"   as const, usdcAddress: "0x5425890298aed601595a70AB815c96711a31Bc65", chainIdHex: "0xa869",   rpc: "https://api.avax-test.network/ext/bc/C/rpc" },
+  { value: "OP_Sepolia",       label: "Optimism Sepolia", icon: "O", kitName: "OP_Sepolia"       as const, usdcAddress: "0x5fd84259d66Cd46123540766Be93DFE6D43130D9", chainIdHex: "0xaa37dc", rpc: "https://sepolia.optimism.io"              },
 ];
 
 const USDC_ABI = ["function balanceOf(address) view returns (uint256)"];
@@ -82,18 +82,18 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
       setStatus("⏳ Estimating bridge fee...");
       const estimate = await kit.estimate({
         from: { adapter, chain: cfg.kitName },
-        to:   { chain: "Arc_Testnet", recipientAddress: wallet },
+        to:   { chain: "Arc_Testnet" as const, recipientAddress: wallet },
         amount,
-        token: "USDC",
+        token: "USDC" as const,
       });
       setSteps([`fee: ~${estimate.maxFee || "0"} USDC`]);
 
       setStatus("⏳ Bridging... (confirm approve + burn di wallet)");
       const result = await kit.bridge({
         from: { adapter, chain: cfg.kitName },
-        to:   { chain: "Arc_Testnet", recipientAddress: wallet },
+        to:   { chain: "Arc_Testnet" as const, recipientAddress: wallet },
         amount,
-        token: "USDC",
+        token: "USDC" as const,
         onStatusChange: (s: any) => {
           const step = s?.currentStep?.name || s?.status || "";
           if (step) setStatus(`⏳ ${step}...`);
