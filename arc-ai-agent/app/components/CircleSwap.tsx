@@ -71,7 +71,7 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
 
       setStatus("⏳ Estimating swap...");
       const estimate = await kit.estimate({
-        from: { adapter, chain: "ArcTestnet" },
+        from: { adapter, chain: "Arc_Testnet" },
         tokenIn,
         tokenOut,
         amountIn: amount,
@@ -81,7 +81,7 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
 
       setStatus(`⏳ Swapping ${amount} ${tokenIn} → ${tokenOut}... (confirm di wallet)`);
       const result = await kit.swap({
-        from: { adapter, chain: "ArcTestnet" },
+        from: { adapter, chain: "Arc_Testnet" },
         tokenIn,
         tokenOut,
         amountIn: amount,
