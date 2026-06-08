@@ -74,16 +74,16 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
       setStatus("⏳ Estimating...");
       const estimate = await kit.estimate({
         from: { adapter, chain: cfg.value },
-        to:   { chain: "Arc_Testnet", recipientAddress: wallet },
+        to:   { adapter, chain: "Arc_Testnet" },
         amount,
         token: "USDC",
       });
-      setSteps([`fee: ~${estimate?.maxFee ?? "0"} USDC`]);
+      setSteps([`fee: ~${(estimate as any)?.maxFee ?? "0"} USDC`]);
 
       setStatus("⏳ Bridging... (confirm di wallet)");
       const result = await kit.bridge({
         from: { adapter, chain: cfg.value },
-        to:   { chain: "Arc_Testnet", recipientAddress: wallet },
+        to:   { adapter, chain: "Arc_Testnet" },
         amount,
         token: "USDC",
         onStatusChange: (s: any) => {
