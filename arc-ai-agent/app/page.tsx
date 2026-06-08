@@ -871,8 +871,6 @@ export default function Home() {
                 </div>
                 <CircleSwap
                   wallet={wallet}
-                  usdcBal={usdcBal}
-                  eurcBal={eurcBal}
                   onSuccess={(txHash) => {
                     setTxCount(c=>c+1);
                     refreshBalances(wallet, new ethers.BrowserProvider((window as any).ethereum));
