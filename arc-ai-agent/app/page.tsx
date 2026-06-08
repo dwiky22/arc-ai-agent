@@ -2,14 +2,15 @@
 import { useState, useEffect } from "react";
 import dynamic from "next/dynamic";
 import { ethers } from "ethers";
+import { ConnectButton } from "@rainbow-me/rainbowkit";
+import { useAccount } from "wagmi";
 
 const CircleSwap   = dynamic(() => import("./components/CircleSwap"),   { ssr: false });
 const CircleBridge = dynamic(() => import("./components/CircleBridge"), { ssr: false });
 
 const USDC_ADDRESS = "0x3600000000000000000000000000000000000000";
 const EURC_ADDRESS = "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a";
-const ARC_CHAIN_ID_HEX = "0x4cef52";
-const ARC_RPC          = "https://rpc.testnet.arc.network";
+const ARC_RPC      = "https://rpc.testnet.arc.network";
 
 const ERC20_ABI = [
   "function balanceOf(address) view returns (uint256)",
@@ -19,98 +20,47 @@ const ERC20_ABI = [
 type Tab = "swap" | "send" | "bridge" | "dashboard";
 
 export default function Home() {
-  const [wallet, setWallet]           = useState("");
-  const [activeTab, setActiveTab]     = useState<Tab>("swap");
-  const [showModal, setShowModal]     = useState(false);
-  const [sendTo, setSendTo]           = useState("");
-  const [sendAmount, setSendAmount]   = useState("");
-  const [sendToken, setSendToken]     = useState<"USDC"|"EURC">("USDC");
-  const [sendStatus, setSendStatus]   = useState("");
-  const [usdcBal, setUsdcBal]         = useState("");
-  const [eurcBal, setEurcBal]         = useState("");
-  const [txHistory, setTxHistory]     = useState<string[]>([]);
-  const [chainOk, setChainOk]         = useState(false);
+  const { address, isConnected } = useAccount();
+  const wallet = address || "";
 
-  // Auto-reconnect jika wallet sudah pernah connect
+  const [activeTab, setActiveTab]   = useState<Tab>("swap");
+  const [sendTo, setSendTo]         = useState("");
+  const [sendAmount, setSendAmount] = useState("");
+  const [sendToken, setSendToken]   = useState<"USDC"|"EURC">("USDC");
+  const [sendStatus, setSendStatus] = useState("");
+  const [usdcBal, setUsdcBal]       = useState("");
+  const [eurcBal, setEurcBal]       = useState("");
+  const [txHistory, setTxHistory]   = useState<string[]>([]);
+
   useEffect(() => {
-    const eth = (window as any).ethereum;
-    if (!eth) return;
-    eth.request({ method: "eth_accounts" }).then((accounts: string[]) => {
-      if (accounts[0]) {
-        setWallet(accounts[0]);
-        ensureARC().then(() => fetchBalances(accounts[0]));
-      }
-    });
-    eth.on("accountsChanged", (accounts: string[]) => {
-      setWallet(accounts[0] || "");
-      if (accounts[0]) fetchBalances(accounts[0]);
-    });
-    eth.on("chainChanged", () => window.location.reload());
-  }, []);
+    if (wallet) fetchBalances();
+  }, [wallet]);
 
-  async function ensureARC() {
-    const eth = (window as any).ethereum;
-    if (!eth) return;
-    try {
-      await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: ARC_CHAIN_ID_HEX }] });
-      setChainOk(true);
-    } catch (e: any) {
-      if (e.code === 4902 || e.code === -32603) {
-        await eth.request({ method: "wallet_addEthereumChain", params: [{
-          chainId: ARC_CHAIN_ID_HEX, chainName: "ARC Testnet",
-          rpcUrls: [ARC_RPC], nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
-        }]});
-        await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: ARC_CHAIN_ID_HEX }] });
-        setChainOk(true);
-      }
-    }
-    await new Promise(r => setTimeout(r, 600));
-  }
-
-  async function fetchBalances(addr?: string) {
-    const target = addr || wallet;
-    if (!target) return;
+  async function fetchBalances() {
+    if (!wallet) return;
     try {
       const provider = new ethers.JsonRpcProvider(ARC_RPC);
       const usdc = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
       const eurc = new ethers.Contract(EURC_ADDRESS, ERC20_ABI, provider);
-      const [u, e] = await Promise.all([usdc.balanceOf(target), eurc.balanceOf(target)]);
+      const [u, e] = await Promise.all([usdc.balanceOf(wallet), eurc.balanceOf(wallet)]);
       setUsdcBal(parseFloat(ethers.formatUnits(u, 6)).toFixed(2));
       setEurcBal(parseFloat(ethers.formatUnits(e, 6)).toFixed(2));
     } catch {}
   }
 
-  async function connectWallet() {
-    const eth = (window as any).ethereum;
-    if (!eth) return alert("Install MetaMask atau wallet EVM dulu!");
-    try {
-      const accounts = await eth.request({ method: "eth_requestAccounts" });
-      await ensureARC();
-      setWallet(accounts[0]);
-      await fetchBalances(accounts[0]);
-      setShowModal(false);
-    } catch (e: any) {
-      alert("Gagal connect: " + e.message);
-    }
-  }
-
   async function handleSend() {
     if (!wallet || !sendTo || !sendAmount) return;
-    setSendStatus("⏳ Switching ke ARC...");
+    setSendStatus("⏳ Mengirim... (konfirmasi di wallet)");
     try {
-      await ensureARC();
       const eth = (window as any).ethereum;
       const provider = new ethers.BrowserProvider(eth);
       const signer   = await provider.getSigner();
       const tokenAddr = sendToken === "USDC" ? USDC_ADDRESS : EURC_ADDRESS;
       const contract  = new ethers.Contract(tokenAddr, ERC20_ABI, signer);
-
-      setSendStatus("⏳ Mengirim... (konfirmasi di wallet)");
       const tx = await contract.transfer(sendTo, ethers.parseUnits(sendAmount, 6));
       await tx.wait();
-
-      setSendStatus(`✅ Berhasil kirim ${sendAmount} ${sendToken} ke ${sendTo.slice(0,8)}...`);
-      setTxHistory(prev => [`${sendAmount} ${sendToken} → ${sendTo.slice(0,8)}...`, ...prev.slice(0,4)]);
+      setSendStatus(`✅ Berhasil kirim ${sendAmount} ${sendToken}`);
+      setTxHistory(prev => [`${sendAmount} ${sendToken} → ${sendTo.slice(0,10)}...`, ...prev.slice(0,4)]);
       setSendAmount(""); setSendTo("");
       await fetchBalances();
     } catch (e: any) {
@@ -153,7 +103,7 @@ export default function Home() {
         </nav>
 
         {/* Balance di sidebar */}
-        {wallet && (
+        {isConnected && (
           <div className="border-t border-white/[0.05] pt-3 mt-3 space-y-1.5">
             <div className="flex justify-between">
               <span className="text-[10px] text-gray-600 font-mono">USDC</span>
@@ -163,7 +113,7 @@ export default function Home() {
               <span className="text-[10px] text-gray-600 font-mono">EURC</span>
               <span className="text-[10px] text-white font-mono">{eurcBal || "–"}</span>
             </div>
-            <button onClick={() => fetchBalances()} className="text-[10px] text-gray-600 hover:text-gray-400 font-mono">↻ refresh</button>
+            <button onClick={fetchBalances} className="text-[10px] text-gray-600 hover:text-gray-400 font-mono">↻ refresh</button>
           </div>
         )}
       </aside>
@@ -172,46 +122,33 @@ export default function Home() {
       <div className="flex-1 flex flex-col min-w-0">
         {/* Header */}
         <header className="h-14 border-b border-white/[0.06] flex items-center px-6 justify-between flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <h2 className="font-mono text-sm font-bold text-white capitalize">{activeTab}</h2>
-            {chainOk && <span className="text-[9px] bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full font-mono">ARC ✓</span>}
-          </div>
-          {wallet ? (
-            <div className="flex items-center gap-2">
-              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400"/>
-              <span className="text-xs font-mono text-gray-400">{wallet.slice(0,6)}...{wallet.slice(-4)}</span>
-            </div>
-          ) : (
-            <button onClick={() => setShowModal(true)}
-              className="bg-cyan-500 hover:bg-cyan-400 text-black font-bold px-4 py-1.5 rounded-lg font-mono text-xs transition-all">
-              Connect Wallet
-            </button>
-          )}
+          <h2 className="font-mono text-sm font-bold text-white capitalize">{activeTab}</h2>
+          <ConnectButton
+            chainStatus="icon"
+            accountStatus="avatar"
+            showBalance={false}
+          />
         </header>
 
         {/* Content */}
         <div className="flex-1 overflow-auto">
-          {!wallet && activeTab !== "dashboard" && (
+          {!isConnected && activeTab !== "dashboard" && (
             <div className="flex flex-col items-center justify-center h-full gap-4">
               <p className="text-gray-500 font-mono text-sm">Connect wallet untuk mulai</p>
-              <button onClick={() => setShowModal(true)}
-                className="bg-cyan-500 hover:bg-cyan-400 text-black font-bold px-6 py-2.5 rounded-xl font-mono text-sm transition-all">
-                Connect Wallet
-              </button>
+              <ConnectButton />
             </div>
           )}
 
-          {activeTab === "swap" && wallet && (
+          {activeTab === "swap" && isConnected && (
             <CircleSwap wallet={wallet} onSuccess={handleSuccess} />
           )}
 
-          {activeTab === "bridge" && wallet && (
+          {activeTab === "bridge" && isConnected && (
             <CircleBridge wallet={wallet} onSuccess={handleSuccess} />
           )}
 
-          {activeTab === "send" && wallet && (
+          {activeTab === "send" && isConnected && (
             <div className="max-w-md mx-auto p-6 space-y-4">
-              {/* Token selector */}
               <div className="flex gap-2">
                 {(["USDC", "EURC"] as const).map(t => (
                   <button key={t} onClick={() => setSendToken(t)}
@@ -223,26 +160,22 @@ export default function Home() {
                 ))}
               </div>
 
-              {/* Address input */}
               <div>
                 <label className="text-[10px] text-gray-500 font-mono uppercase tracking-widest block mb-1.5">Alamat Tujuan</label>
                 <input placeholder="0x..." value={sendTo} onChange={e => setSendTo(e.target.value)}
                   className="w-full bg-white/[0.03] border border-white/[0.08] focus:border-cyan-500/40 text-white rounded-xl px-4 py-3 text-sm font-mono outline-none transition-all placeholder:text-gray-700"/>
               </div>
 
-              {/* Amount input */}
               <div>
                 <div className="flex justify-between items-center mb-1.5">
                   <label className="text-[10px] text-gray-500 font-mono uppercase tracking-widest">Jumlah</label>
-                  <span className="text-[10px] text-gray-500 font-mono">
-                    bal: {sendToken === "USDC" ? usdcBal : eurcBal} {sendToken}
-                  </span>
+                  <span className="text-[10px] text-gray-500 font-mono">bal: {sendToken === "USDC" ? usdcBal : eurcBal} {sendToken}</span>
                 </div>
                 <input type="number" placeholder="0.00" value={sendAmount} onChange={e => setSendAmount(e.target.value)}
                   className="w-full bg-white/[0.03] border border-white/[0.08] focus:border-cyan-500/40 text-white rounded-xl px-4 py-3 text-sm font-mono outline-none transition-all placeholder:text-gray-700"/>
               </div>
 
-              <button onClick={handleSend} disabled={!sendTo || !sendAmount || !!sendStatus.startsWith("⏳")}
+              <button onClick={handleSend} disabled={!sendTo || !sendAmount || sendStatus.startsWith("⏳")}
                 className="w-full bg-cyan-600 hover:bg-cyan-500 disabled:opacity-25 text-white font-bold py-3.5 rounded-xl font-mono text-xs transition-all flex items-center justify-center gap-2">
                 ↗ Kirim {sendAmount || "0"} {sendToken}
               </button>
@@ -261,7 +194,7 @@ export default function Home() {
             <div className="p-6 space-y-4 max-w-lg mx-auto">
               <div className="bg-white/[0.02] border border-white/[0.06] rounded-xl p-5 space-y-3">
                 <h3 className="font-mono text-xs text-gray-400 uppercase tracking-widest">Wallet</h3>
-                {wallet ? (
+                {isConnected ? (
                   <>
                     <p className="font-mono text-sm text-white break-all">{wallet}</p>
                     <div className="grid grid-cols-2 gap-3 mt-3">
@@ -276,7 +209,7 @@ export default function Home() {
                     </div>
                   </>
                 ) : (
-                  <button onClick={() => setShowModal(true)} className="bg-cyan-500 text-black font-bold px-4 py-2 rounded-lg font-mono text-xs">Connect Wallet</button>
+                  <ConnectButton />
                 )}
               </div>
 
@@ -300,26 +233,6 @@ export default function Home() {
           )}
         </div>
       </div>
-
-      {/* Wallet Modal */}
-      {showModal && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 backdrop-blur-sm"
-          onClick={() => setShowModal(false)}>
-          <div className="bg-[#0d0f1a] border border-white/10 rounded-2xl p-6 w-80 shadow-2xl"
-            onClick={e => e.stopPropagation()}>
-            <h3 className="font-mono text-sm font-bold text-white mb-4">Connect Wallet</h3>
-            <button onClick={connectWallet}
-              className="w-full flex items-center gap-3 px-4 py-3 bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.08] rounded-xl transition-all">
-              <span className="text-xl">🦊</span>
-              <div className="text-left">
-                <p className="text-sm font-mono text-white">MetaMask / Rabby</p>
-                <p className="text-[10px] text-gray-500 font-mono">Browser wallet</p>
-              </div>
-            </button>
-            <button onClick={() => setShowModal(false)} className="w-full mt-3 text-[10px] text-gray-600 hover:text-gray-400 font-mono">Batal</button>
-          </div>
-        </div>
-      )}
     </main>
   );
 }

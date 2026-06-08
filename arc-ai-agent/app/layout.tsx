@@ -1,47 +1,21 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import Script from "next/script";
+import { Providers } from "./providers";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
+const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "ARC AI DApp",
-  description: "AI-powered DApp on Arc Testnet",
+  title: "ARC AI DApp Hub",
+  description: "AI-powered DApp on ARC Testnet",
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
-      <body className="min-h-full flex flex-col">
-        {children}
-        <Script id="suppress-ext-errors" strategy="beforeInteractive">{`
-          window.addEventListener('error', function(e) {
-            if (e.filename && e.filename.includes('chrome-extension')) {
-              e.stopImmediatePropagation();
-              e.preventDefault();
-              return true;
-            }
-          });
-          window.addEventListener('unhandledrejection', function(e) {
-            if (e.reason && e.reason.stack && e.reason.stack.includes('chrome-extension')) {
-              e.stopImmediatePropagation();
-              e.preventDefault();
-            }
-          });
-        `}</Script>
+    <html lang="en">
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+        <Providers>{children}</Providers>
       </body>
     </html>
   );
