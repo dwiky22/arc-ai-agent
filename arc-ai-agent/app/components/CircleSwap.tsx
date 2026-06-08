@@ -6,22 +6,18 @@ const ARC_CHAIN_ID_HEX = "0x4cef52";
 const ARC_RPC           = "https://rpc.testnet.arc.network";
 const USDC_ADDRESS      = "0x3600000000000000000000000000000000000000";
 const EURC_ADDRESS      = "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a";
-const ERC20_ABI         = ["function balanceOf(address) view returns (uint256)"];
+const AMM_ADDRESS       = "0x717f5bC7C849e502c6C0c4D2f911B0f65Ba25C80";
 
-// Curve ARC pool address — pakai Router untuk swap
-// Pool USDC/EURC di ARC Testnet via Curve
-const CURVE_ROUTER      = "0xF0d4c12A5768D806021F80a262B4d39d26C58b8D";
-const CURVE_POOL        = "0x0f39686D8FfC41BAa7B1AF56A8A8C104d4CAF7CA";
-
-const CURVE_POOL_ABI = [
-  "function exchange(int128 i, int128 j, uint256 dx, uint256 min_dy) returns (uint256)",
-  "function get_dy(int128 i, int128 j, uint256 dx) view returns (uint256)",
-  "function coins(uint256) view returns (address)",
-];
-const ERC20_APPROVE_ABI = [
+const ERC20_ABI = [
   "function balanceOf(address) view returns (uint256)",
   "function approve(address spender, uint256 amount) returns (bool)",
   "function allowance(address owner, address spender) view returns (uint256)",
+];
+const AMM_ABI = [
+  "function swapAtoB(uint256 amountIn, uint256 minAmountOut) external",
+  "function swapBtoA(uint256 amountIn, uint256 minAmountOut) external",
+  "function getAmountOut(uint256 amountIn, uint256 resIn, uint256 resOut) view returns (uint256)",
+  "function getReserves() view returns (uint256, uint256)",
 ];
 
 interface Props { wallet: string; onSuccess: (txHash: string) => void; }
@@ -38,25 +34,14 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
 
   const tokenIn  = direction === "USDC_EURC" ? "USDC" : "EURC";
   const tokenOut = direction === "USDC_EURC" ? "EURC" : "USDC";
-  // Curve pool: coin(0)=USDC, coin(1)=EURC
-  const i = direction === "USDC_EURC" ? 0 : 1;
-  const j = direction === "USDC_EURC" ? 1 : 0;
-
-  function getProvider() {
-    const win = window as any;
-    return win.ethereum;
-  }
 
   async function ensureARC() {
-    const eth = getProvider();
+    const eth = (window as any).ethereum;
     try {
       await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: ARC_CHAIN_ID_HEX }] });
     } catch (e: any) {
       if (e.code === 4902 || e.code === -32603) {
-        await eth.request({ method: "wallet_addEthereumChain", params: [{
-          chainId: ARC_CHAIN_ID_HEX, chainName: "ARC Testnet", rpcUrls: [ARC_RPC],
-          nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 }
-        }]});
+        await eth.request({ method: "wallet_addEthereumChain", params: [{ chainId: ARC_CHAIN_ID_HEX, chainName: "ARC Testnet", rpcUrls: [ARC_RPC], nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 } }] });
         await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: ARC_CHAIN_ID_HEX }] });
       }
     }
@@ -79,9 +64,12 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
     if (!amount || parseFloat(amount) <= 0) { setEstOut(""); return; }
     try {
       const provider = new ethers.JsonRpcProvider(ARC_RPC);
-      const pool = new ethers.Contract(CURVE_POOL, CURVE_POOL_ABI, provider);
+      const amm = new ethers.Contract(AMM_ADDRESS, AMM_ABI, provider);
+      const [resA, resB] = await amm.getReserves();
       const parsed = ethers.parseUnits(amount, 6);
-      const out = await pool.get_dy(i, j, parsed);
+      const out = direction === "USDC_EURC"
+        ? await amm.getAmountOut(parsed, resA, resB)
+        : await amm.getAmountOut(parsed, resB, resA);
       setEstOut(parseFloat(ethers.formatUnits(out, 6)).toFixed(4));
     } catch { setEstOut("~"); }
   }
@@ -92,35 +80,36 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
   async function handleSwap() {
     if (!amount || !wallet) return;
     setLoading(true); setStatus(""); setSteps([]);
-
     try {
-      const eth = getProvider();
+      const eth = (window as any).ethereum;
       setStatus("⏳ Switching ke ARC Testnet...");
       await ensureARC();
 
       const provider = new ethers.BrowserProvider(eth);
       const signer   = await provider.getSigner();
       const parsed   = ethers.parseUnits(amount, 6);
-      const minOut   = (parsed * 98n) / 100n; // 2% slippage
+      const minOut   = (parsed * 95n) / 100n; // 5% slippage
 
-      const tokenInAddress = direction === "USDC_EURC" ? USDC_ADDRESS : EURC_ADDRESS;
-      const token = new ethers.Contract(tokenInAddress, ERC20_APPROVE_ABI, signer);
+      const tokenInAddr = direction === "USDC_EURC" ? USDC_ADDRESS : EURC_ADDRESS;
+      const token = new ethers.Contract(tokenInAddr, ERC20_ABI, signer);
 
-      // Approve
-      const allowance = await token.allowance(wallet, CURVE_POOL);
+      // Cek dan approve
+      const allowance = await token.allowance(wallet, AMM_ADDRESS);
       if (allowance < parsed) {
         setStatus("⏳ Approving... (konfirmasi di wallet)");
-        const tx = await token.approve(CURVE_POOL, ethers.MaxUint256);
-        await tx.wait();
+        const approveTx = await token.approve(AMM_ADDRESS, ethers.MaxUint256);
+        await approveTx.wait();
         setSteps(["approve: ✓"]);
       } else {
         setSteps(["approve: sudah ada ✓"]);
       }
 
-      // Swap via Curve pool
+      // Swap
       setStatus(`⏳ Swapping ${amount} ${tokenIn} → ${tokenOut}... (konfirmasi di wallet)`);
-      const pool   = new ethers.Contract(CURVE_POOL, CURVE_POOL_ABI, signer);
-      const swapTx = await pool.exchange(i, j, parsed, minOut);
+      const amm = new ethers.Contract(AMM_ADDRESS, AMM_ABI, signer);
+      const swapTx = direction === "USDC_EURC"
+        ? await amm.swapAtoB(parsed, minOut)
+        : await amm.swapBtoA(parsed, minOut);
       const receipt = await swapTx.wait();
 
       setSteps(prev => [...prev, `swap: ✓ ${receipt.hash.slice(0, 14)}...`]);
@@ -145,7 +134,6 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
 
   return (
     <div className="p-6 space-y-4">
-      {/* Token In */}
       <div className="bg-white/[0.02] border border-white/[0.06] rounded-xl p-4 space-y-3">
         <div className="flex justify-between items-center">
           <span className="text-[10px] text-gray-500 font-mono uppercase tracking-widest">You Pay</span>
@@ -162,15 +150,11 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
         </div>
       </div>
 
-      {/* Swap toggle */}
       <div className="flex justify-center">
         <button onClick={() => { setDirection(d => d === "USDC_EURC" ? "EURC_USDC" : "USDC_EURC"); setEstOut(""); }}
-          className="w-8 h-8 rounded-full bg-white/[0.04] border border-white/[0.08] hover:border-white/20 flex items-center justify-center text-gray-400 hover:text-white transition-all text-sm">
-          ⇅
-        </button>
+          className="w-8 h-8 rounded-full bg-white/[0.04] border border-white/[0.08] hover:border-white/20 flex items-center justify-center text-gray-400 hover:text-white transition-all text-sm">⇅</button>
       </div>
 
-      {/* Token Out */}
       <div className="bg-white/[0.02] border border-white/[0.06] rounded-xl p-4 space-y-3">
         <div className="flex justify-between items-center">
           <span className="text-[10px] text-gray-500 font-mono uppercase tracking-widest">You Receive</span>
@@ -182,10 +166,9 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
         </div>
       </div>
 
-      {/* Info */}
       <div className="bg-white/[0.02] border border-white/[0.05] rounded-xl px-4 py-3 space-y-1.5">
-        <p className="text-[10px] text-gray-500 font-mono">📈 Swap via Curve Finance pool · ARC Testnet</p>
-        <p className="text-[10px] text-gray-500 font-mono">💱 USDC ↔ EURC · 2% max slippage</p>
+        <p className="text-[10px] text-gray-500 font-mono">⬡ SimpleAMM · ARC Testnet · x·y=k</p>
+        <p className="text-[10px] text-gray-500 font-mono">💱 USDC ↔ EURC · 5% max slippage</p>
       </div>
 
       <button onClick={handleSwap} disabled={!wallet || !amount || loading}
