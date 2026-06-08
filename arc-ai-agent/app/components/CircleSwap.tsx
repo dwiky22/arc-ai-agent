@@ -14,6 +14,21 @@ const ERC20_ABI         = ["function balanceOf(address) view returns (uint256)"]
 
 interface Props { wallet: string; onSuccess: (txHash: string) => void; }
 
+// SwapKit result type — dari Arc docs resmi
+interface SwapResult {
+  tokenIn: string;
+  tokenOut: string;
+  chain: { chain: string; isTestnet: boolean };
+  amountIn: string;
+  amountOut: string;
+  fromAddress: string;
+  toAddress: string;
+  txHash: string;
+  explorerUrl: string;
+  fees: Array<{ token: string; amount: string; type: string }>;
+  config: { kitKey: string };
+}
+
 export default function CircleSwap({ wallet, onSuccess }: Props) {
   const [direction, setDirection] = useState<"USDC_EURC" | "EURC_USDC">("USDC_EURC");
   const [amount, setAmount]       = useState("");
@@ -25,7 +40,6 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
 
   const tokenIn  = (direction === "USDC_EURC" ? "USDC" : "EURC") as "USDC" | "EURC";
   const tokenOut = (direction === "USDC_EURC" ? "EURC" : "USDC") as "EURC" | "USDC";
-  const addrIn   = direction === "USDC_EURC" ? USDC_ADDRESS : EURC_ADDRESS;
 
   async function ensureARC() {
     const eth = (window as any).ethereum;
@@ -69,28 +83,27 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
 
       const kit = new SwapKit();
 
-      setStatus("⏳ Estimating swap...");
-      const estimate = await kit.estimate({
-        from: { adapter, chain: "Arc_Testnet" },
-        tokenIn,
-        tokenOut,
-        amountIn: amount,
-        config: { kitKey: KIT_KEY },
-      });
-      setSteps([`estimate: ~${estimate?.amountOut || "?"} ${tokenOut}`]);
-
       setStatus(`⏳ Swapping ${amount} ${tokenIn} → ${tokenOut}... (confirm di wallet)`);
+
+      // kit.swap() langsung return result — tidak ada method estimate() terpisah
       const result = await kit.swap({
         from: { adapter, chain: "Arc_Testnet" },
         tokenIn,
         tokenOut,
         amountIn: amount,
         config: { kitKey: KIT_KEY },
-      });
+      }) as SwapResult;
 
-      const txHash = result?.steps?.find((s: any) => s.txHash)?.txHash || result?.transactionHash || "";
-      setSteps(prev => [...prev, `swap: ✓ ${txHash.slice(0, 14)}...`]);
-      setStatus(`✅ Swap berhasil! ${amount} ${tokenIn} → ${tokenOut}`);
+      // amountOut ada langsung di result object
+      const txHash    = result?.txHash ?? "";
+      const amountOut = result?.amountOut ?? "?";
+
+      setSteps([
+        `swap: ✓ ${amount} ${tokenIn} → ${amountOut} ${tokenOut}`,
+        txHash ? `txHash: ${txHash.slice(0, 14)}...` : "",
+      ].filter(Boolean));
+
+      setStatus(`✅ Swap berhasil! ${amount} ${tokenIn} → ${amountOut} ${tokenOut}`);
       setAmount("");
       await fetchBalances();
       if (txHash) onSuccess(txHash);
