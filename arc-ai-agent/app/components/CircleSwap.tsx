@@ -16,7 +16,6 @@ const ERC20_ABI = [
 const AMM_ABI = [
   "function swapAtoB(uint256 amountIn, uint256 minAmountOut) external",
   "function swapBtoA(uint256 amountIn, uint256 minAmountOut) external",
-  "function getReserves() view returns (uint256, uint256)",
 ];
 
 interface Props { wallet: string; onSuccess: (txHash: string) => void; }
@@ -33,8 +32,19 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
   const tokenIn  = direction === "USDC_EURC" ? "USDC" : "EURC";
   const tokenOut = direction === "USDC_EURC" ? "EURC" : "USDC";
 
+  // Ambil provider yang benar — prioritas Rabby, fallback MetaMask
+  function getProvider() {
+    const win = window as any;
+    // Rabby inject sebagai window.rabby atau window.ethereum dengan isRabby
+    const eth = win.rabby || 
+                (win.ethereum?.isRabby ? win.ethereum : null) ||
+                win.ethereum;
+    if (!eth) throw new Error("Wallet tidak ditemukan. Pastikan Rabby/MetaMask aktif.");
+    return eth;
+  }
+
   async function ensureARC() {
-    const eth = (window as any).ethereum;
+    const eth = getProvider();
     try {
       await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: ARC_CHAIN_ID_HEX }] });
     } catch (e: any) {
@@ -46,14 +56,15 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
         await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: ARC_CHAIN_ID_HEX }] });
       }
     }
-    await new Promise(r => setTimeout(r, 600));
+    await new Promise(r => setTimeout(r, 800));
   }
 
   async function fetchBalances() {
     if (!wallet) return;
     try {
+      const eth = getProvider();
       await ensureARC();
-      const provider = new ethers.BrowserProvider((window as any).ethereum);
+      const provider = new ethers.BrowserProvider(eth);
       const usdc = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
       const eurc = new ethers.Contract(EURC_ADDRESS, ERC20_ABI, provider);
       const [u, e] = await Promise.all([usdc.balanceOf(wallet), eurc.balanceOf(wallet)]);
@@ -67,31 +78,41 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
     setLoading(true); setStatus(""); setSteps([]);
 
     try {
+      const eth = getProvider();
+
       setStatus("⏳ Switching ke ARC Testnet...");
       await ensureARC();
 
-      const provider = new ethers.BrowserProvider((window as any).ethereum);
+      // Request accounts dulu — pastikan wallet sudah unlock
+      await eth.request({ method: "eth_requestAccounts" });
+      await new Promise(r => setTimeout(r, 500));
+
+      const provider = new ethers.BrowserProvider(eth);
       const signer   = await provider.getSigner();
+      const address  = await signer.getAddress();
 
       const amountParsed = ethers.parseUnits(amount, 6);
-      const minOut       = (amountParsed * 95n) / 100n; // 5% slippage tolerance
+      const minOut       = (amountParsed * 95n) / 100n;
 
       const tokenInAddress = direction === "USDC_EURC" ? USDC_ADDRESS : EURC_ADDRESS;
       const tokenContract  = new ethers.Contract(tokenInAddress, ERC20_ABI, signer);
       const amm            = new ethers.Contract(AMM_ADDRESS, AMM_ABI, signer);
 
-      // Step 1: Approve
-      setStatus("⏳ Step 1/2: Approve token... (confirm di wallet)");
-      setSteps(["approve: menunggu konfirmasi..."]);
-      const allowance = await tokenContract.allowance(wallet, AMM_ADDRESS);
-      if (allowance < amountParsed) {
-        const approveTx = await tokenContract.approve(AMM_ADDRESS, amountParsed);
-        await approveTx.wait();
-      }
-      setSteps(["approve: ✓ selesai"]);
+      // Cek allowance dulu
+      const allowance = await tokenContract.allowance(address, AMM_ADDRESS);
 
-      // Step 2: Swap
-      setStatus("⏳ Step 2/2: Swap... (confirm di wallet)");
+      if (allowance < amountParsed) {
+        setStatus("⏳ Step 1/2: Approve token... (cek wallet kamu!)");
+        setSteps(["approve: menunggu konfirmasi di wallet..."]);
+        const approveTx = await tokenContract.approve(AMM_ADDRESS, amountParsed);
+        setSteps(["approve: waiting block confirmation..."]);
+        await approveTx.wait();
+        setSteps(["approve: ✓ selesai"]);
+      } else {
+        setSteps(["approve: ✓ sudah ada allowance"]);
+      }
+
+      setStatus("⏳ Step 2/2: Swap... (cek wallet kamu!)");
       const swapTx = direction === "USDC_EURC"
         ? await amm.swapAtoB(amountParsed, minOut)
         : await amm.swapBtoA(amountParsed, minOut);
@@ -100,14 +121,8 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
       const receipt = await swapTx.wait();
       const txHash  = receipt.hash;
 
-      // Fetch updated balances to calculate amountOut
-      const eurc    = new ethers.Contract(EURC_ADDRESS, ERC20_ABI, provider);
-      const usdc    = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
-      const [u, e]  = await Promise.all([usdc.balanceOf(wallet), eurc.balanceOf(wallet)]);
-      setUsdcBal(parseFloat(ethers.formatUnits(u, 6)).toFixed(2));
-      setEurcBal(parseFloat(ethers.formatUnits(e, 6)).toFixed(2));
-
-      setSteps(["approve: ✓", `swap: ✓ txHash: ${txHash.slice(0, 14)}...`]);
+      await fetchBalances();
+      setSteps(prev => [...prev.slice(0,-1), `swap: ✓ txHash: ${txHash.slice(0,14)}...`]);
       setStatus(`✅ Swap berhasil! ${amount} ${tokenIn} → ${tokenOut}`);
       setAmount("");
       onSuccess(txHash);
