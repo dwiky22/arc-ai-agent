@@ -1,18 +1,17 @@
 "use client";
 import { useState } from "react";
 import { ethers } from "ethers";
-import { SwapKit } from "@circle-fin/swap-kit";
+import { AppKit } from "@circle-fin/app-kit";
 import { createEthersAdapterFromProvider } from "@circle-fin/adapter-ethers-v6";
 
 const KIT_KEY = process.env.NEXT_PUBLIC_CIRCLE_KIT_KEY || "";
 
 const ARC_CHAIN_ID_HEX = "0x4cef52";
-const ARC_RPC           = "https://rpc.arc.io";
+const ARC_RPC           = "https://rpc.testnet.arc.network";
 const USDC_ADDRESS      = "0x3600000000000000000000000000000000000000";
 const EURC_ADDRESS      = "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a";
 const ERC20_ABI         = ["function balanceOf(address) view returns (uint256)"];
 
-// Chain string literal — cast as const agar TypeScript tahu exact type-nya
 const ARC_CHAIN = "Arc_Testnet" as const;
 
 interface Props { wallet: string; onSuccess: (txHash: string) => void; }
@@ -37,7 +36,7 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
       if (e.code === 4902 || e.code === -32603) {
         await eth.request({
           method: "wallet_addEthereumChain",
-          params: [{ chainId: ARC_CHAIN_ID_HEX, chainName: "ARC Testnet", rpcUrls: [ARC_RPC], nativeCurrency: { name: "ARC", symbol: "ARC", decimals: 18 } }],
+          params: [{ chainId: ARC_CHAIN_ID_HEX, chainName: "ARC Testnet", rpcUrls: [ARC_RPC], nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 } }],
         });
         await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: ARC_CHAIN_ID_HEX }] });
       }
@@ -70,13 +69,15 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
 
       const eth = (window as any).ethereum;
       setStatus("⏳ Membuat adapter dari wallet...");
+      // Pastikan user sudah connect dulu
+      await eth.request({ method: "eth_requestAccounts" });
       const adapter = await createEthersAdapterFromProvider({ provider: eth });
 
-      const kit = new SwapKit();
+      // Pakai AppKit dari @circle-fin/app-kit — ini yang benar sesuai docs Arc resmi
+      const kit = new AppKit();
 
       setStatus(`⏳ Swapping ${amount} ${tokenIn} → ${tokenOut}... (confirm di wallet)`);
 
-      // "Arc_Testnet" as const → TypeScript tahu exact literal type, match Blockchain enum
       const result = await kit.swap({
         from: { adapter, chain: ARC_CHAIN },
         tokenIn,
@@ -85,9 +86,8 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
         config: { kitKey: KIT_KEY },
       });
 
-      // result.txHash & result.amountOut — sesuai Arc docs resmi
-      const txHash    = (result as any)?.txHash ?? "";
-      const amountOut = (result as any)?.amountOut ?? "?";
+      const txHash    = result?.txHash ?? "";
+      const amountOut = result?.amountOut ?? "?";
 
       setSteps([
         `swap: ✓ ${amount} ${tokenIn} → ${amountOut} ${tokenOut}`,
@@ -154,7 +154,7 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
 
       {/* Info */}
       <div className="bg-white/[0.02] border border-white/[0.05] rounded-xl px-4 py-3 space-y-1.5">
-        <p className="text-[10px] text-gray-500 font-mono">⬡ Swap on ARC Testnet · Circle Swap Kit</p>
+        <p className="text-[10px] text-gray-500 font-mono">⬡ Swap on ARC Testnet · Circle App Kit</p>
         <p className="text-[10px] text-gray-500 font-mono">💱 USDC ↔ EURC · Native stablecoin swap</p>
       </div>
 
