@@ -12,22 +12,10 @@ const USDC_ADDRESS      = "0x3600000000000000000000000000000000000000";
 const EURC_ADDRESS      = "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a";
 const ERC20_ABI         = ["function balanceOf(address) view returns (uint256)"];
 
-interface Props { wallet: string; onSuccess: (txHash: string) => void; }
+// Chain string literal — cast as const agar TypeScript tahu exact type-nya
+const ARC_CHAIN = "Arc_Testnet" as const;
 
-// SwapKit result type — dari Arc docs resmi
-interface SwapResult {
-  tokenIn: string;
-  tokenOut: string;
-  chain: { chain: string; isTestnet: boolean };
-  amountIn: string;
-  amountOut: string;
-  fromAddress: string;
-  toAddress: string;
-  txHash: string;
-  explorerUrl: string;
-  fees: Array<{ token: string; amount: string; type: string }>;
-  config: { kitKey: string };
-}
+interface Props { wallet: string; onSuccess: (txHash: string) => void; }
 
 export default function CircleSwap({ wallet, onSuccess }: Props) {
   const [direction, setDirection] = useState<"USDC_EURC" | "EURC_USDC">("USDC_EURC");
@@ -47,7 +35,10 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
       await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: ARC_CHAIN_ID_HEX }] });
     } catch (e: any) {
       if (e.code === 4902 || e.code === -32603) {
-        await eth.request({ method: "wallet_addEthereumChain", params: [{ chainId: ARC_CHAIN_ID_HEX, chainName: "ARC Testnet", rpcUrls: [ARC_RPC], nativeCurrency: { name: "ARC", symbol: "ARC", decimals: 18 } }] });
+        await eth.request({
+          method: "wallet_addEthereumChain",
+          params: [{ chainId: ARC_CHAIN_ID_HEX, chainName: "ARC Testnet", rpcUrls: [ARC_RPC], nativeCurrency: { name: "ARC", symbol: "ARC", decimals: 18 } }],
+        });
         await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: ARC_CHAIN_ID_HEX }] });
       }
     }
@@ -85,18 +76,18 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
 
       setStatus(`⏳ Swapping ${amount} ${tokenIn} → ${tokenOut}... (confirm di wallet)`);
 
-      // kit.swap() langsung return result — tidak ada method estimate() terpisah
+      // "Arc_Testnet" as const → TypeScript tahu exact literal type, match Blockchain enum
       const result = await kit.swap({
-        from: { adapter, chain: "Arc_Testnet" },
+        from: { adapter, chain: ARC_CHAIN },
         tokenIn,
         tokenOut,
         amountIn: amount,
         config: { kitKey: KIT_KEY },
-      }) as SwapResult;
+      });
 
-      // amountOut ada langsung di result object
-      const txHash    = result?.txHash ?? "";
-      const amountOut = result?.amountOut ?? "?";
+      // result.txHash & result.amountOut — sesuai Arc docs resmi
+      const txHash    = (result as any)?.txHash ?? "";
+      const amountOut = (result as any)?.amountOut ?? "?";
 
       setSteps([
         `swap: ✓ ${amount} ${tokenIn} → ${amountOut} ${tokenOut}`,
@@ -169,7 +160,10 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
 
       <button onClick={handleSwap} disabled={!wallet || !amount || loading}
         className="w-full bg-purple-600 hover:bg-purple-500 disabled:opacity-25 disabled:cursor-not-allowed text-white font-bold py-3.5 rounded-xl font-mono text-xs transition-all active:scale-[0.99] flex items-center justify-center gap-2">
-        {loading ? <><div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"/>Swapping...</> : <>⇄ Swap {amount || "0"} {tokenIn} → {tokenOut}</>}
+        {loading
+          ? <><div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"/>Swapping...</>
+          : <>⇄ Swap {amount || "0"} {tokenIn} → {tokenOut}</>
+        }
       </button>
 
       {steps.length > 0 && (
@@ -179,7 +173,11 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
       )}
 
       {status && (
-        <div className={`rounded-xl px-4 py-3 text-xs font-mono border whitespace-pre-wrap ${status.startsWith("✅") ? "bg-emerald-500/8 border-emerald-500/20 text-emerald-300" : status.startsWith("❌") ? "bg-red-500/8 border-red-500/20 text-red-300" : "bg-amber-500/8 border-amber-500/20 text-amber-300"}`}>{status}</div>
+        <div className={`rounded-xl px-4 py-3 text-xs font-mono border whitespace-pre-wrap ${
+          status.startsWith("✅") ? "bg-emerald-500/8 border-emerald-500/20 text-emerald-300"
+          : status.startsWith("❌") ? "bg-red-500/8 border-red-500/20 text-red-300"
+          : "bg-amber-500/8 border-amber-500/20 text-amber-300"
+        }`}>{status}</div>
       )}
     </div>
   );
