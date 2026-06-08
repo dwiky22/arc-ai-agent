@@ -5,23 +5,19 @@ import { BridgeKit } from "@circle-fin/bridge-kit";
 import { createEthersAdapterFromProvider } from "@circle-fin/adapter-ethers-v6";
 
 const BRIDGE_CHAINS = [
-  { value: "Ethereum_Sepolia", label: "Ethereum Sepolia", icon: "Ξ", usdcAddress: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", chainIdHex: "0xaa36a7", rpc: "https://ethereum-sepolia-rpc.publicnode.com", symbol: "ETH" },
-  { value: "Base_Sepolia",     label: "Base Sepolia",     icon: "B", usdcAddress: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", chainIdHex: "0x14a34",  rpc: "https://base-sepolia-rpc.publicnode.com",  symbol: "ETH" },
-  { value: "Arbitrum_Sepolia", label: "Arbitrum Sepolia", icon: "A", usdcAddress: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d", chainIdHex: "0x66eee",  rpc: "https://sepolia-rollup.arbitrum.io/rpc",   symbol: "ETH" },
-  { value: "Avalanche_Fuji",   label: "Avalanche Fuji",   icon: "▲", usdcAddress: "0x5425890298aed601595a70AB815c96711a31Bc65", chainIdHex: "0xa869",   rpc: "https://api.avax-test.network/ext/bc/C/rpc", symbol: "AVAX" },
-  { value: "Optimism_Sepolia", label: "Optimism Sepolia", icon: "O", usdcAddress: "0x5fd84259d66Cd46123540766Be93DFE6D43130D9", chainIdHex: "0xaa37dc", rpc: "https://sepolia.optimism.io",              symbol: "ETH" },
-] as const;
-
-type ChainValue = typeof BRIDGE_CHAINS[number]["value"];
+  { value: "Ethereum_Sepolia" as const, label: "Ethereum Sepolia", icon: "Ξ", usdcAddress: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", chainIdHex: "0xaa36a7", rpc: "https://ethereum-sepolia-rpc.publicnode.com", symbol: "ETH" },
+  { value: "Base_Sepolia"     as const, label: "Base Sepolia",     icon: "B", usdcAddress: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", chainIdHex: "0x14a34",  rpc: "https://base-sepolia-rpc.publicnode.com",  symbol: "ETH" },
+  { value: "Arbitrum_Sepolia" as const, label: "Arbitrum Sepolia", icon: "A", usdcAddress: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d", chainIdHex: "0x66eee",  rpc: "https://sepolia-rollup.arbitrum.io/rpc",   symbol: "ETH" },
+  { value: "Avalanche_Fuji"   as const, label: "Avalanche Fuji",   icon: "▲", usdcAddress: "0x5425890298aed601595a70AB815c96711a31Bc65", chainIdHex: "0xa869",   rpc: "https://api.avax-test.network/ext/bc/C/rpc", symbol: "AVAX" },
+  { value: "Optimism_Sepolia" as const, label: "Optimism Sepolia", icon: "O", usdcAddress: "0x5fd84259d66Cd46123540766Be93DFE6D43130D9", chainIdHex: "0xaa37dc", rpc: "https://sepolia.optimism.io",              symbol: "ETH" },
+];
 
 const USDC_ABI = ["function balanceOf(address) view returns (uint256)"];
-const ARC_CHAIN_ID_HEX = "0x4cef52";
-const ARC_RPC = "https://rpc.arc.io";
 
 interface Props { wallet: string; onSuccess: (txHash: string) => void; }
 
 export default function CircleBridge({ wallet, onSuccess }: Props) {
-  const [fromChain, setFromChain]   = useState<ChainValue>("Base_Sepolia");
+  const [fromChain, setFromChain]   = useState<typeof BRIDGE_CHAINS[number]["value"]>("Base_Sepolia");
   const [amount, setAmount]         = useState("");
   const [srcBalance, setSrcBalance] = useState("");
   const [loading, setLoading]       = useState(false);
@@ -42,7 +38,7 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
     await new Promise(r => setTimeout(r, 600));
   }
 
-  async function switchAndFetch(chainVal: ChainValue) {
+  async function switchAndFetch(chainVal: typeof BRIDGE_CHAINS[number]["value"]) {
     if (!wallet) return;
     setSwitching(true); setSrcBalance("");
     const cfg = BRIDGE_CHAINS.find(c => c.value === chainVal)!;
@@ -69,33 +65,34 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
 
       setStatus("⏳ Membuat adapter...");
       const adapter = await createEthersAdapterFromProvider({ provider: eth });
-      const kit = new BridgeKit();
 
-      setStatus("⏳ Estimating...");
+      // Register event listener untuk progress
+      const kit = new BridgeKit();
+      kit.on("*" as any, (payload: any) => {
+        const action = payload?.method || payload?.action || "";
+        if (action) setStatus(`⏳ ${action}...`);
+      });
+
+      setStatus("⏳ Estimating fee...");
       const estimate = await kit.estimate({
         from: { adapter, chain: cfg.value },
-        to:   { adapter, chain: "Arc_Testnet" },
+        to:   { chain: "Arc_Testnet", recipientAddress: wallet, useForwarder: true },
         amount,
-        token: "USDC",
       });
-      setSteps([`fee: ~${(estimate as any)?.maxFee ?? "0"} USDC`]);
+      setSteps([`est. fee: ~${(estimate as any)?.maxFee ?? "0"} USDC`]);
 
-      setStatus("⏳ Bridging... (confirm di wallet)");
+      setStatus("⏳ Bridging... (confirm approve + burn di wallet)");
       const result = await kit.bridge({
         from: { adapter, chain: cfg.value },
-        to:   { adapter, chain: "Arc_Testnet" },
+        to:   { chain: "Arc_Testnet", recipientAddress: wallet, useForwarder: true },
         amount,
-        token: "USDC",
-        onStatusChange: (s: any) => {
-          const step = s?.currentStep?.name || s?.status || "";
-          if (step) setStatus(`⏳ ${step}...`);
-        },
       });
 
-      const txHash = (result as any)?.steps?.find((s: any) => s.txHash)?.txHash
-        || (result as any)?.transactionHash || "";
+      const txHash = (result as any)?.steps?.find((s: any) => s.name === "mint" && s.txHash)?.txHash
+        || (result as any)?.steps?.find((s: any) => s.txHash)?.txHash
+        || "";
 
-      setSteps(prev => [...prev, `bridge: ✓ ${txHash ? txHash.slice(0, 14) + "..." : "done"}`]);
+      setSteps(prev => [...prev, `bridge: ✓${txHash ? " " + txHash.slice(0, 14) + "..." : " done"}`]);
       setStatus(`✅ Bridge selesai! ${amount} USDC sudah di ARC Testnet!`);
       setAmount(""); setSrcBalance("");
       if (txHash) onSuccess(txHash);
@@ -142,7 +139,7 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
           <div className="w-7 h-7 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 font-bold text-xs">A</div>
           <div>
             <p className="text-white font-mono text-xs font-bold">ARC Testnet</p>
-            <p className="text-[10px] text-gray-600 font-mono">via Circle Bridge Kit · Auto-mint</p>
+            <p className="text-[10px] text-gray-600 font-mono">via Circle Bridge Kit · Forwarder Auto-mint</p>
           </div>
         </div>
         <span className="text-[10px] text-cyan-400/70 font-mono bg-cyan-500/8 border border-cyan-500/15 px-2 py-1 rounded-lg">Auto ✓</span>
@@ -158,8 +155,8 @@ export default function CircleBridge({ wallet, onSuccess }: Props) {
       </div>
 
       <div className="bg-white/[0.02] border border-white/[0.05] rounded-xl px-4 py-3 space-y-1.5">
-        <p className="text-[10px] text-gray-500 font-mono">🔐 Circle Bridge Kit · CCTP v2 · Auto-mint</p>
-        <p className="text-[10px] text-gray-500 font-mono">⏱ Standard Transfer · Gratis · ~5 menit</p>
+        <p className="text-[10px] text-gray-500 font-mono">🔐 Circle Bridge Kit · CCTP v2 · Orbit Forwarder</p>
+        <p className="text-[10px] text-gray-500 font-mono">⏱ Auto-mint oleh Circle Relayer · ~2-5 menit</p>
         <p className="text-[10px] text-amber-500/70 font-mono">⚠ Jangan tutup tab selama proses berlangsung</p>
       </div>
 
