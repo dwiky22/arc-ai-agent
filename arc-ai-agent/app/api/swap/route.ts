@@ -1,108 +1,46 @@
+// app/api/swap/route.ts
+// Server-side proxy — Circle API dipanggil dari server, bukan browser
 import { NextRequest, NextResponse } from "next/server";
+import { AppKit } from "@circle-fin/app-kit";
+import { createEthersAdapterFromPrivateKey } from "@circle-fin/adapter-ethers-v6";
+
+const KIT_KEY     = process.env.CIRCLE_KIT_KEY || process.env.NEXT_PUBLIC_CIRCLE_KIT_KEY || "";
+const PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY || "";
 
 export async function POST(req: NextRequest) {
   try {
-    const { tokenIn, tokenOut, amount, walletAddress } = await req.json();
+    const { tokenIn, tokenOut, amountIn, wallet } = await req.json();
 
-    if (!tokenIn || !tokenOut || !amount || !walletAddress) {
-      return NextResponse.json({ success: false, error: "Missing parameters" }, { status: 400 });
+    if (!KIT_KEY)     return NextResponse.json({ error: "KIT_KEY tidak di-set" }, { status: 500 });
+    if (!PRIVATE_KEY) return NextResponse.json({ error: "DEPLOYER_PRIVATE_KEY tidak di-set" }, { status: 500 });
+    if (!tokenIn || !tokenOut || !amountIn) {
+      return NextResponse.json({ error: "tokenIn, tokenOut, amountIn wajib diisi" }, { status: 400 });
     }
 
-    // Circle App Kit swap — gunakan KIT_KEY dari env
-    const kitKey = process.env.KIT_KEY;
-    if (!kitKey) {
-      return NextResponse.json({ success: false, error: "KIT_KEY not configured" }, { status: 500 });
-    }
-
-    // Token addresses di ARC Testnet
-    const TOKEN_ADDRESSES: Record<string, string> = {
-      USDC: "0x3600000000000000000000000000000000000000",
-      EURC: "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a",
-    };
-
-    const tokenInAddress = TOKEN_ADDRESSES[tokenIn];
-    const tokenOutAddress = TOKEN_ADDRESSES[tokenOut];
-
-    if (!tokenInAddress || !tokenOutAddress) {
-      return NextResponse.json({ success: false, error: `Token ${tokenIn} atau ${tokenOut} tidak didukung` }, { status: 400 });
-    }
-
-    // Coba pakai Circle App Kit API
-    // Circle App Kit endpoint untuk quote dan swap
-    const amountInUnits = Math.floor(parseFloat(amount) * 1_000_000).toString(); // 6 decimals
-
-    // Step 1: Get quote
-    const quoteRes = await fetch("https://api.circle.com/v1/w3s/swap/quote", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${kitKey}`,
-        "X-Kit-Key": kitKey,
-      },
-      body: JSON.stringify({
-        chain: "ARC-TESTNET",
-        chainId: "5042002",
-        tokenIn: tokenInAddress,
-        tokenOut: tokenOutAddress,
-        amountIn: amountInUnits,
-        slippageTolerance: "100", // 1%
-        walletAddress,
-      }),
+    // Adapter pakai private key server — hanya untuk eksekusi swap onchain
+    // Wallet user dipakai sebagai toAddress di result (informational)
+    const adapter = createEthersAdapterFromPrivateKey({
+      privateKey: PRIVATE_KEY,
     });
 
-    if (!quoteRes.ok) {
-      const errText = await quoteRes.text();
-      console.error("Quote error:", errText);
-      // Fallback: return info untuk redirect ke Curve
-      return NextResponse.json({
-        success: false,
-        error: "Circle App Kit swap tidak tersedia untuk Arc Testnet saat ini. Gunakan Curve Finance.",
-        fallbackUrl: `https://www.curve.finance/dex/arc/swap/?from=${tokenIn}&to=${tokenOut}&amount=${amount}`,
-        useFallback: true,
-      }, { status: 200 });
-    }
+    const kit = new AppKit();
 
-    const quote = await quoteRes.json();
-
-    // Step 2: Execute swap
-    const swapRes = await fetch("https://api.circle.com/v1/w3s/swap/execute", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${kitKey}`,
-        "X-Kit-Key": kitKey,
-      },
-      body: JSON.stringify({
-        quoteId: quote.data?.quoteId,
-        walletAddress,
-      }),
+    const result = await kit.swap({
+      from: { adapter, chain: "Arc_Testnet" },
+      tokenIn:  tokenIn  as "USDC" | "EURC",
+      tokenOut: tokenOut as "EURC" | "USDC",
+      amountIn,
+      config: { kitKey: KIT_KEY },
     });
-
-    if (!swapRes.ok) {
-      const errText = await swapRes.text();
-      console.error("Swap execute error:", errText);
-      return NextResponse.json({
-        success: false,
-        error: "Swap execution gagal",
-        useFallback: true,
-        fallbackUrl: `https://www.curve.finance/dex/arc/swap/?from=${tokenIn}&to=${tokenOut}&amount=${amount}`,
-      }, { status: 200 });
-    }
-
-    const swapData = await swapRes.json();
 
     return NextResponse.json({
-      success: true,
-      txHash: swapData.data?.txHash || swapData.data?.transactionHash,
-      amountOut: swapData.data?.amountOut,
+      txHash:    result.txHash,
+      amountOut: result.amountOut,
+      explorerUrl: result.explorerUrl,
     });
 
-  } catch (error: any) {
-    console.error("Swap route error:", error);
-    return NextResponse.json({
-      success: false,
-      error: error.message || "Internal server error",
-      useFallback: true,
-    }, { status: 200 });
+  } catch (e: any) {
+    const msg = e?.reason || e?.message || "Swap failed";
+    return NextResponse.json({ error: String(msg) }, { status: 500 });
   }
 }

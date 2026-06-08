@@ -1,18 +1,12 @@
 "use client";
 import { useState } from "react";
 import { ethers } from "ethers";
-import { AppKit } from "@circle-fin/app-kit";
-import { createEthersAdapterFromProvider } from "@circle-fin/adapter-ethers-v6";
-
-const KIT_KEY = process.env.NEXT_PUBLIC_CIRCLE_KIT_KEY || "";
 
 const ARC_CHAIN_ID_HEX = "0x4cef52";
 const ARC_RPC           = "https://rpc.testnet.arc.network";
 const USDC_ADDRESS      = "0x3600000000000000000000000000000000000000";
 const EURC_ADDRESS      = "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a";
 const ERC20_ABI         = ["function balanceOf(address) view returns (uint256)"];
-
-const ARC_CHAIN = "Arc_Testnet" as const;
 
 interface Props { wallet: string; onSuccess: (txHash: string) => void; }
 
@@ -25,8 +19,8 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
   const [status, setStatus]       = useState("");
   const [steps, setSteps]         = useState<string[]>([]);
 
-  const tokenIn  = (direction === "USDC_EURC" ? "USDC" : "EURC") as "USDC" | "EURC";
-  const tokenOut = (direction === "USDC_EURC" ? "EURC" : "USDC") as "EURC" | "USDC";
+  const tokenIn  = direction === "USDC_EURC" ? "USDC" : "EURC";
+  const tokenOut = direction === "USDC_EURC" ? "EURC" : "USDC";
 
   async function ensureARC() {
     const eth = (window as any).ethereum;
@@ -60,34 +54,26 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
 
   async function handleSwap() {
     if (!amount || !wallet) return;
-    if (!KIT_KEY) { setStatus("❌ NEXT_PUBLIC_CIRCLE_KIT_KEY belum di-set di .env.local"); return; }
     setLoading(true); setStatus(""); setSteps([]);
 
     try {
       setStatus("⏳ Switching ke ARC Testnet...");
       await ensureARC();
 
-      const eth = (window as any).ethereum;
-      setStatus("⏳ Membuat adapter dari wallet...");
-      // Pastikan user sudah connect dulu
-      await eth.request({ method: "eth_requestAccounts" });
-      const adapter = await createEthersAdapterFromProvider({ provider: eth });
+      setStatus(`⏳ Swapping ${amount} ${tokenIn} → ${tokenOut} via server...`);
 
-      // Pakai AppKit dari @circle-fin/app-kit — ini yang benar sesuai docs Arc resmi
-      const kit = new AppKit();
-
-      setStatus(`⏳ Swapping ${amount} ${tokenIn} → ${tokenOut}... (confirm di wallet)`);
-
-      const result = await kit.swap({
-        from: { adapter, chain: ARC_CHAIN },
-        tokenIn,
-        tokenOut,
-        amountIn: amount,
-        config: { kitKey: KIT_KEY },
+      // Panggil API route server-side — Circle API tidak pernah dipanggil dari browser
+      const res = await fetch("/api/swap", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tokenIn, tokenOut, amountIn: amount, wallet }),
       });
 
-      const txHash    = result?.txHash ?? "";
-      const amountOut = result?.amountOut ?? "?";
+      const data = await res.json();
+
+      if (!res.ok) throw new Error(data.error || "Swap API error");
+
+      const { txHash, amountOut, explorerUrl } = data;
 
       setSteps([
         `swap: ✓ ${amount} ${tokenIn} → ${amountOut} ${tokenOut}`,
@@ -100,12 +86,8 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
       if (txHash) onSuccess(txHash);
 
     } catch (e: any) {
-      if (e?.code === 4001 || e?.code === "ACTION_REJECTED") {
-        setStatus("❌ Dibatalkan oleh user.");
-      } else {
-        const msg = e?.reason || e?.message || "Swap failed";
-        setStatus("❌ " + String(msg).slice(0, 300));
-      }
+      const msg = e?.message || "Swap failed";
+      setStatus("❌ " + String(msg).slice(0, 300));
     }
     setLoading(false);
   }
@@ -115,7 +97,6 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
 
   return (
     <div className="p-6 space-y-4">
-      {/* Token In */}
       <div className="bg-white/[0.02] border border-white/[0.06] rounded-xl p-4 space-y-3">
         <div className="flex justify-between items-center">
           <span className="text-[10px] text-gray-500 font-mono uppercase tracking-widest">You Pay</span>
@@ -132,7 +113,6 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
         </div>
       </div>
 
-      {/* Swap direction toggle */}
       <div className="flex justify-center">
         <button onClick={() => setDirection(d => d === "USDC_EURC" ? "EURC_USDC" : "USDC_EURC")}
           className="w-8 h-8 rounded-full bg-white/[0.04] border border-white/[0.08] hover:border-white/20 flex items-center justify-center text-gray-400 hover:text-white transition-all text-sm">
@@ -140,7 +120,6 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
         </button>
       </div>
 
-      {/* Token Out */}
       <div className="bg-white/[0.02] border border-white/[0.06] rounded-xl p-4 space-y-3">
         <div className="flex justify-between items-center">
           <span className="text-[10px] text-gray-500 font-mono uppercase tracking-widest">You Receive</span>
@@ -152,7 +131,6 @@ export default function CircleSwap({ wallet, onSuccess }: Props) {
         </div>
       </div>
 
-      {/* Info */}
       <div className="bg-white/[0.02] border border-white/[0.05] rounded-xl px-4 py-3 space-y-1.5">
         <p className="text-[10px] text-gray-500 font-mono">⬡ Swap on ARC Testnet · Circle App Kit</p>
         <p className="text-[10px] text-gray-500 font-mono">💱 USDC ↔ EURC · Native stablecoin swap</p>
